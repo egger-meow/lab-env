@@ -1,0 +1,89 @@
+{
+  "schema_version": "v001",
+  "instrument_id": "puzzle_hints_v001",
+  "instrument_version": "0.1.0",
+  "environment_id": "puzzle_hints",
+  "item_id": "pz_pilot_03",
+  "template_id": "template_symmetric_gap_5",
+  "language": "zh-TW",
+  "public_stimulus": {
+    "num_positions": 5,
+    "items": ["water", "light", "fire", "wind", "earth"],
+    "item_labels": {
+      "water": "流水",
+      "light": "光芒",
+      "fire": "火焰",
+      "wind": "微風",
+      "earth": "泥土"
+    },
+    "clues": [
+      {
+        "clue_id": "c1",
+        "clue_type": "at_position",
+        "item_a": "fire",
+        "position": 3,
+        "text_zh": "火焰在第 3 格。"
+      },
+      {
+        "clue_id": "c2",
+        "clue_type": "at_position",
+        "item_a": "earth",
+        "position": 5,
+        "text_zh": "泥土在第 5 格。"
+      },
+      {
+        "clue_id": "c3",
+        "clue_type": "adjacent",
+        "item_a": "water",
+        "item_b": "light",
+        "text_zh": "流水與光芒相鄰。"
+      },
+      {
+        "clue_id": "c4",
+        "clue_type": "adjacent",
+        "item_a": "light",
+        "item_b": "fire",
+        "text_zh": "光芒與火焰相鄰。"
+      },
+      {
+        "clue_id": "c5",
+        "clue_type": "before",
+        "item_a": "water",
+        "item_b": "light",
+        "text_zh": "流水在光芒左邊。"
+      }
+    ]
+  },
+  "action_specs": [
+    {
+      "action_id": "continue",
+      "label": "我再自己試一下",
+      "description": "不給新資訊，回到解謎",
+      "params": {}
+    },
+    {
+      "action_id": "hint",
+      "label": "給我一點方向",
+      "description": "顯示預先審核的線索方向，不直接填一格",
+      "params": {}
+    },
+    {
+      "action_id": "next_step",
+      "label": "告訴我下一步",
+      "description": "揭露一個尚未確定的正確放置，畫面標出為系統揭露",
+      "params": {}
+    },
+    {
+      "action_id": "solution",
+      "label": "顯示完整解法",
+      "description": "顯示完整答案，停止本題主要遊玩流程",
+      "params": {}
+    }
+  ],
+  "author_status": "engine_validated",
+  "private_data": {
+    "expected_solution": ["water", "light", "fire", "wind", "earth"],
+    "hint_text": "火焰固定在中心第 3 格，而流水與光芒相鄰且都在火焰左側，請注意微風只能放在第 4 格。",
+    "source_clue_ids": ["c1", "c2", "c3", "c4", "c5"]
+  }
+}

@@ -1,0 +1,81 @@
+{
+  "schema_version": "v001",
+  "instrument_id": "puzzle_hints_v001",
+  "instrument_version": "0.1.0",
+  "environment_id": "puzzle_hints",
+  "item_id": "pz_practice_01",
+  "template_id": "template_direct_anchor_4",
+  "language": "zh-TW",
+  "public_stimulus": {
+    "num_positions": 4,
+    "items": ["moon", "key", "star", "leaf"],
+    "item_labels": {
+      "moon": "月亮",
+      "key": "鑰匙",
+      "star": "星星",
+      "leaf": "葉子"
+    },
+    "clues": [
+      {
+        "clue_id": "c1",
+        "clue_type": "before",
+        "item_a": "key",
+        "item_b": "star",
+        "text_zh": "鑰匙在星星左邊。"
+      },
+      {
+        "clue_id": "c2",
+        "clue_type": "adjacent",
+        "item_a": "moon",
+        "item_b": "key",
+        "text_zh": "月亮與鑰匙相鄰。"
+      },
+      {
+        "clue_id": "c3",
+        "clue_type": "at_position",
+        "item_a": "leaf",
+        "position": 4,
+        "text_zh": "葉子在第 4 格。"
+      },
+      {
+        "clue_id": "c4",
+        "clue_type": "not_at_position",
+        "item_a": "key",
+        "position": 1,
+        "text_zh": "鑰匙不在第 1 格。"
+      }
+    ]
+  },
+  "action_specs": [
+    {
+      "action_id": "continue",
+      "label": "我再自己試一下",
+      "description": "不給新資訊，回到解謎",
+      "params": {}
+    },
+    {
+      "action_id": "hint",
+      "label": "給我一點方向",
+      "description": "顯示預先審核的線索方向，不直接填一格",
+      "params": {}
+    },
+    {
+      "action_id": "next_step",
+      "label": "告訴我下一步",
+      "description": "揭露一個尚未確定的正確放置，畫面標出為系統揭露",
+      "params": {}
+    },
+    {
+      "action_id": "solution",
+      "label": "顯示完整解法",
+      "description": "顯示完整答案，停止本題主要遊玩流程",
+      "params": {}
+    }
+  ],
+  "author_status": "engine_validated",
+  "private_data": {
+    "expected_solution": ["moon", "key", "star", "leaf"],
+    "hint_text": "注意葉子已鎖定在第 4 格，且鑰匙不在第 1 格，請思考鑰匙與月亮的相對位置。",
+    "source_clue_ids": ["c3", "c4", "c2"]
+  }
+}

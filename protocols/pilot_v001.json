@@ -1,0 +1,19 @@
+{
+  "protocol_id": "pilot_v001",
+  "protocol_version": "0.1.0",
+  "name": "Preference Lab M1 Pilot Protocol",
+  "active_play_ms_threshold": 45000,
+  "feedback_policy": "immediate_after_commit",
+  "environments": {
+    "puzzle_hints": {
+      "practice_items": ["pz_practice_01", "pz_practice_02"],
+      "pilot_items": ["pz_pilot_01", "pz_pilot_02", "pz_pilot_03", "pz_pilot_04"]
+    },
+    "bret_discrete": {
+      "practice_items": ["bret_tutorial_01", "bret_tutorial_02"],
+      "pilot_items": ["bret_pilot_01", "bret_pilot_02", "bret_pilot_03", "bret_pilot_04"]
+    }
+  },
+  "default_environment_order": ["puzzle_hints", "bret_discrete"],
+  "allow_order_swap": true
+}

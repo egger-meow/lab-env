@@ -1,0 +1,66 @@
+{
+  "schema_version": "v001",
+  "instrument_id": "bret_discrete_v001",
+  "instrument_version": "0.1.0",
+  "environment_id": "bret_discrete",
+  "item_id": "bret_pilot_01",
+  "template_id": "template_bret_n100_r1",
+  "language": "zh-TW",
+  "public_stimulus": {
+    "num_boxes": 100,
+    "reward_per_box": 1,
+    "options": [
+      {
+        "action_id": "collect_0",
+        "k": 0,
+        "label": "收集 0 個箱子"
+      },
+      {
+        "action_id": "collect_20",
+        "k": 20,
+        "label": "收集 20 個箱子"
+      },
+      {
+        "action_id": "collect_40",
+        "k": 40,
+        "label": "收集 40 個箱子"
+      },
+      {
+        "action_id": "collect_60",
+        "k": 60,
+        "label": "收集 60 個箱子"
+      }
+    ],
+    "explanation_zh": "100 個箱子中均勻藏有 1 個炸彈。每箱價值 1 點。若炸彈在所選箱數之外則獲得收益；若在所選箱數內則本輪收益為 0。"
+  },
+  "action_specs": [
+    {
+      "action_id": "collect_0",
+      "label": "收集 0 個箱子",
+      "description": "本輪取 0 箱，不承擔風險，收益為 0",
+      "params": {"k": 0}
+    },
+    {
+      "action_id": "collect_20",
+      "label": "收集 20 個箱子",
+      "description": "取 20 箱，命中率 20%，未命中收益 20 點",
+      "params": {"k": 20}
+    },
+    {
+      "action_id": "collect_40",
+      "label": "收集 40 個箱子",
+      "description": "取 40 箱，命中率 40%，未命中收益 40 點",
+      "params": {"k": 40}
+    },
+    {
+      "action_id": "collect_60",
+      "label": "收集 60 個箱子",
+      "description": "取 60 箱，命中率 60%，未命中收益 60 點",
+      "params": {"k": 60}
+    }
+  ],
+  "author_status": "engine_validated",
+  "private_data": {
+    "is_tutorial": false
+  }
+}

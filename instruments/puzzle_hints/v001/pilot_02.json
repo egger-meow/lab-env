@@ -1,0 +1,89 @@
+{
+  "schema_version": "v001",
+  "instrument_id": "puzzle_hints_v001",
+  "instrument_version": "0.1.0",
+  "environment_id": "puzzle_hints",
+  "item_id": "pz_pilot_02",
+  "template_id": "template_interval_pair_5",
+  "language": "zh-TW",
+  "public_stimulus": {
+    "num_positions": 5,
+    "items": ["apple", "book", "cup", "drum", "bell"],
+    "item_labels": {
+      "apple": "蘋果",
+      "book": "書籍",
+      "cup": "水杯",
+      "drum": "鼓聲",
+      "bell": "鈴鐺"
+    },
+    "clues": [
+      {
+        "clue_id": "c1",
+        "clue_type": "at_position",
+        "item_a": "apple",
+        "position": 1,
+        "text_zh": "蘋果在第 1 格。"
+      },
+      {
+        "clue_id": "c2",
+        "clue_type": "at_position",
+        "item_a": "book",
+        "position": 5,
+        "text_zh": "書籍在第 5 格。"
+      },
+      {
+        "clue_id": "c3",
+        "clue_type": "adjacent",
+        "item_a": "drum",
+        "item_b": "bell",
+        "text_zh": "鼓聲與鈴鐺相鄰。"
+      },
+      {
+        "clue_id": "c4",
+        "clue_type": "adjacent",
+        "item_a": "bell",
+        "item_b": "cup",
+        "text_zh": "鈴鐺與水杯相鄰。"
+      },
+      {
+        "clue_id": "c5",
+        "clue_type": "before",
+        "item_a": "drum",
+        "item_b": "cup",
+        "text_zh": "鼓聲在水杯左邊。"
+      }
+    ]
+  },
+  "action_specs": [
+    {
+      "action_id": "continue",
+      "label": "我再自己試一下",
+      "description": "不給新資訊，回到解謎",
+      "params": {}
+    },
+    {
+      "action_id": "hint",
+      "label": "給我一點方向",
+      "description": "顯示預先審核的線索方向，不直接填一格",
+      "params": {}
+    },
+    {
+      "action_id": "next_step",
+      "label": "告訴我下一步",
+      "description": "揭露一個尚未確定的正確放置，畫面標出為系統揭露",
+      "params": {}
+    },
+    {
+      "action_id": "solution",
+      "label": "顯示完整解法",
+      "description": "顯示完整答案，停止本題主要遊玩流程",
+      "params": {}
+    }
+  ],
+  "author_status": "engine_validated",
+  "private_data": {
+    "expected_solution": ["apple", "drum", "bell", "cup", "book"],
+    "hint_text": "兩端已固定為蘋果與書籍，中間第 2、3、4 格由鼓聲、鈴鐺、水杯構成相鄰排列。",
+    "source_clue_ids": ["c1", "c2", "c3", "c4", "c5"]
+  }
+}
