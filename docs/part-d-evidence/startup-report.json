@@ -1,0 +1,11 @@
+{
+  "no_token_status": 401,
+  "source": "synthetic_mock",
+  "frontend_status": 200,
+  "health": "ok",
+  "environment": "Windows PowerShell",
+  "trial_abort": "aborted",
+  "custom_token": "accepted",
+  "vite_proxy": "ok",
+  "port": 18752
+}

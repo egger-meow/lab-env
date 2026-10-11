@@ -1,32 +1,5 @@
-# React + TypeScript + Vite
+# Preference Lab Frontend
 
-This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
+React／TypeScript／Vite 參與者與研究者介面。安裝、Token、API proxy、測試與排查請從 [根目錄 README](../README.md) 開始；帶真人操作請看 [PILOT_GUIDE](../PILOT_GUIDE.md)。
 
-Currently, two official plugins are available:
-
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
-
-## React Compiler
-
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
-
-## Expanding the Oxlint configuration
-
-If you are developing a production application, we recommend enabling type-aware lint rules by installing `oxlint-tsgolint` and editing `.oxlintrc.json`:
-
-```json
-{
-  "$schema": "./node_modules/oxlint/configuration_schema.json",
-  "plugins": ["react", "typescript", "oxc"],
-  "options": {
-    "typeAware": true
-  },
-  "rules": {
-    "react/rules-of-hooks": "error",
-    "react/only-export-components": ["warn", { "allowConstantExport": true }]
-  }
-}
-```
-
-See the [Oxlint rules documentation](https://oxc.rs/docs/guide/usage/linter/rules) for the full list of rules and categories.
+本目錄常用命令：`npm ci`、`npm run dev`、`npm run build`、`npm run lint`、`npm run test:e2e`。E2E 需要已安裝的 Windows 後端 venv 與 Chrome，會啟動獨立合成測試服務。
