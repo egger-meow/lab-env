@@ -431,8 +431,44 @@ class LabService:
             raise ValueError(f"active_play_ms cannot decrease: current {trial.active_play_ms}, received {active_play_ms}")
 
         instrument = self.storage.get_instrument_by_hash(trial.instrument_hash) or self.storage.get_instrument(trial.item_id)
-        if instrument and instrument.private_data.get("is_tutorial", False):
+        if not instrument:
+            raise ValueError(f"Instrument {trial.item_id} not found")
+        if instrument.private_data.get("is_tutorial", False):
             raise ValueError("Cannot open decision on tutorial trial. Tutorial trials require demonstration stepping or comprehension completion.")
+
+        # If board is already completely correct, auto-complete as completed_without_decision per spec 5.4 / 164
+        if trial.environment_id == "puzzle_hints":
+            items = instrument.public_stimulus["items"]
+            clues_raw = instrument.public_stimulus["clues"]
+            from preference_lab.domain.puzzle import Clue
+            clues = [Clue.model_validate(c) for c in clues_raw]
+            current_board = trial.public_state.get("board", [])
+            is_solved, msg = check_board(items, current_board, clues)
+            if is_solved:
+                public_state = dict(trial.public_state)
+                public_state["is_solved"] = True
+                public_state["status_message"] = msg
+                events = [("answer_checked", {
+                    "board": current_board,
+                    "is_solved": True,
+                    "status_message": msg,
+                    "auto_checked_on_decision_open": True,
+                })]
+                new_version = self.storage.update_trial_state_atomic(
+                    trial_id=trial_id,
+                    public_state=public_state,
+                    status="completed_without_decision",
+                    active_play_ms=active_play_ms,
+                    expected_state_version=expected_state_version,
+                    events=events,
+                )
+                return {
+                    "status": "completed_without_decision",
+                    "state_version": new_version,
+                    "public_state": public_state,
+                    "is_solved": True,
+                    "status_message": msg,
+                }
 
         events = [("decision_opened", {"active_play_ms": active_play_ms})]
         new_version = self.storage.update_trial_state_atomic(
@@ -774,8 +810,8 @@ class LabService:
             raise ValueError("active_play_ms cannot be negative")
         if active_play_ms < trial.active_play_ms:
             raise ValueError(f"active_play_ms cannot decrease: current {trial.active_play_ms}, received {active_play_ms}")
-        if trial.status == "decision_open" and active_play_ms != trial.active_play_ms:
-            raise ValueError(f"active_play_ms is frozen during decision_open; expected {trial.active_play_ms}, got {active_play_ms}")
+        if (trial.status == "decision_open" or trial.status == "paused") and active_play_ms != trial.active_play_ms:
+            raise ValueError(f"active_play_ms cannot increase while trial is '{trial.status}'; expected {trial.active_play_ms}, got {active_play_ms}")
 
         events = [("trial_skipped", {"reason": reason, "active_play_ms": active_play_ms})]
         new_ver = self.storage.update_trial_state_atomic(
@@ -805,8 +841,8 @@ class LabService:
             raise ValueError("active_play_ms cannot be negative")
         if active_play_ms < trial.active_play_ms:
             raise ValueError(f"active_play_ms cannot decrease: current {trial.active_play_ms}, received {active_play_ms}")
-        if trial.status == "decision_open" and active_play_ms != trial.active_play_ms:
-            raise ValueError(f"active_play_ms is frozen during decision_open; expected {trial.active_play_ms}, got {active_play_ms}")
+        if (trial.status == "decision_open" or trial.status == "paused") and active_play_ms != trial.active_play_ms:
+            raise ValueError(f"active_play_ms cannot increase while trial is '{trial.status}'; expected {trial.active_play_ms}, got {active_play_ms}")
 
         events = [("trial_aborted", {"reason": reason, "active_play_ms": active_play_ms})]
         new_ver = self.storage.update_trial_state_atomic(

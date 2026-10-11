@@ -1083,3 +1083,133 @@ def test_completed_trial_feedback_and_followup_do_not_duplicate_trial_ended(clie
     assert get_trial_ended_count() == 1
 
 
+def test_open_decision_on_already_solved_board_auto_completes_without_decision(client):
+    """P1: When board is already solved but not yet checked, open_decision auto-completes as completed_without_decision."""
+    op_res = client.post(
+        "/api/operator/sessions",
+        headers={"X-Operator-Token": OPERATOR_TOKEN},
+        json={"mode": "pilot", "environment_order": ["puzzle_hints"]},
+    )
+    session_id = op_res.json()["session"]["session_id"]
+    session_code = op_res.json()["session"]["session_code"]
+    trial_id = op_res.json()["first_trial_id"]
+
+    join_res = client.post("/api/sessions/join", json={"session_code": session_code})
+    headers = {"X-Session-Token": join_res.json()["session_token"]}
+
+    # Participant correctly places all pieces on the board without calling check-answer
+    sol_board = ["moon", "key", "star", "leaf"]
+    res_b = client.post(
+        f"/api/trials/{trial_id}/board",
+        headers=headers,
+        json={"board": sol_board, "active_play_ms": 3000, "state_version": 1},
+    )
+    assert res_b.status_code == 200
+    assert res_b.json()["status"] == "active"
+    v_board = res_b.json()["state_version"]
+
+    # Now open decision (e.g. timeout or participant clicked help button)
+    res_open = client.post(
+        f"/api/trials/{trial_id}/open-decision",
+        headers=headers,
+        json={"active_play_ms": 3500, "state_version": v_board},
+    )
+    assert res_open.status_code == 200
+    open_data = res_open.json()
+
+    # Must auto-complete as completed_without_decision rather than opening unexecutable 4 options!
+    assert open_data["status"] == "completed_without_decision"
+    assert open_data["is_solved"] is True
+
+    # Trial in DB is now in terminal status completed_without_decision
+    t_view = client.get(f"/api/trials/{trial_id}", headers=headers).json()
+    assert t_view["status"] == "completed_without_decision"
+    assert t_view["public_state"]["is_solved"] is True
+
+    # Any attempt to submit decision is rejected (400) because trial is not decision_open
+    res_dec = client.post(
+        f"/api/trials/{trial_id}/decision",
+        headers=headers,
+        json={
+            "idempotency_key": "illegal_dec_key_1",
+            "acceptable_by_action": {"continue": "yes", "hint": "yes", "next_step": "yes", "solution": "yes"},
+            "selected_action_id": "next_step",
+            "deliberation_ms": 1000,
+            "state_version": open_data["state_version"],
+        },
+    )
+    assert res_dec.status_code == 400
+    assert "status must be 'decision_open'" in res_dec.json()["detail"]
+
+
+def test_paused_trial_freezes_play_time_for_skip_and_abort(client):
+    """P2: During paused status (from active or decision_open), active_play_ms cannot increase for skip or abort."""
+    op_res = client.post(
+        "/api/operator/sessions",
+        headers={"X-Operator-Token": OPERATOR_TOKEN},
+        json={"mode": "pilot", "environment_order": ["puzzle_hints"]},
+    )
+    session_code = op_res.json()["session"]["session_code"]
+    trial_id = op_res.json()["first_trial_id"]
+
+    join_res = client.post("/api/sessions/join", json={"session_code": session_code})
+    headers = {"X-Session-Token": join_res.json()["session_token"]}
+
+    # 1. Play for 100ms and open decision
+    res_b = client.post(
+        f"/api/trials/{trial_id}/board",
+        headers=headers,
+        json={"board": ["moon", None, None, None], "active_play_ms": 100, "state_version": 1},
+    )
+    assert res_b.status_code == 200
+
+    res_open = client.post(
+        f"/api/trials/{trial_id}/open-decision",
+        headers=headers,
+        json={"active_play_ms": 100, "state_version": res_b.json()["state_version"]},
+    )
+    assert res_open.status_code == 200
+    assert res_open.json()["status"] == "decision_open"
+
+    # 2. Pause during decision_open
+    res_pause = client.post(
+        f"/api/trials/{trial_id}/pause",
+        headers=headers,
+        json={"active_play_ms": 100, "state_version": res_open.json()["state_version"]},
+    )
+    assert res_pause.status_code == 200
+    assert res_pause.json()["status"] == "paused"
+    p_ver = res_pause.json()["state_version"]
+
+    # 3. Attempt to skip with increased time (100 -> 200) -> 400 rejected!
+    res_skip_illegal = client.post(
+        f"/api/trials/{trial_id}/skip",
+        headers=headers,
+        json={"reason": "skip while paused", "active_play_ms": 200, "state_version": p_ver},
+    )
+    assert res_skip_illegal.status_code == 400
+    assert "active_play_ms cannot increase while trial is 'paused'" in res_skip_illegal.json()["detail"]
+
+    # 4. Attempt to abort with increased time (100 -> 200) -> 400 rejected!
+    res_abort_illegal = client.post(
+        f"/api/trials/{trial_id}/abort",
+        headers=headers,
+        json={"reason": "abort while paused", "active_play_ms": 200, "state_version": p_ver},
+    )
+    assert res_abort_illegal.status_code == 400
+    assert "active_play_ms cannot increase while trial is 'paused'" in res_abort_illegal.json()["detail"]
+
+    # 5. Skip with exact preserved time 100 succeeds!
+    res_skip_valid = client.post(
+        f"/api/trials/{trial_id}/skip",
+        headers=headers,
+        json={"reason": "skip paused", "active_play_ms": 100, "state_version": p_ver},
+    )
+    assert res_skip_valid.status_code == 200
+    assert res_skip_valid.json()["status"] == "skipped"
+
+    t_view = client.get(f"/api/trials/{trial_id}", headers=headers).json()
+    assert t_view["active_play_ms"] == 100
+
+
+

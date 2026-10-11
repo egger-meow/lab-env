@@ -140,6 +140,22 @@
   - api: `v0.1.0`
 - **舊資料可比較性**：向前相容，完全保真真人操作行為邊界與事件語意。
 
+---
+
+## 2026-10-11: Part B 第四輪程式審查修正 (Review Fixes 4: Solved Board Open Decision Guard & Paused Play Time Freeze)
+
+- **日期**：2026-10-11
+- **修改內容**：
+  1. 正確棋盤開啟決策防護 (P1)：在 `open_decision` 執行前，引擎檢查當前棋盤是否已達到正解；若已解出，依規格第 5.4 / 164 條自動原子結算為 `completed_without_decision`，記錄 `answer_checked` 與 `trial_ended` 事件，不進入 `decision_open` 狀態、不呈現無法執行的四項偏好卡片，杜絕 `next_step` 在全對棋盤執行報錯的邊界問題。
+  2. 暫停狀態全面凍結遊玩時間 (P2)：在 `skip_trial` 與 `abort_trial` 中，若試驗處於 `paused` 或 `decision_open` 狀態，強制校驗客戶端傳入之 `active_play_ms` 必須嚴格等於當前試驗之累積凍結值，杜絕受試者經由暫停繞過時間凍結（如 `decision_open` -> `pause` -> `skip` 增加時間）。
+- **來源**：Human-origin（審查意見與反例要求）+ AI-origin（工程實作與全覆蓋測試）
+- **影響版本**：
+  - schema: `v001`
+  - storage: `sqlite_v001`
+  - api: `v0.1.0`
+- **舊資料可比較性**：向前相容，杜絕狀態機邊界懸掛與時間漏洞。
+
+
 
 
 
