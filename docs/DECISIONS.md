@@ -41,3 +41,30 @@
   - protocol: `pilot_v001`
 - **舊資料可比較性**：素材文字修正為語意保真對齊，不破壞舊資料解法或題型結構。
 
+---
+
+## 2026-10-11: Part B 後端 API 與 SQLite 儲存層實作 (Storage & API Layer)
+
+- **日期**：2026-10-11
+- **修改內容**：
+  1. SQLite 儲存架構實作（`Storage`）：
+     - 建立 `sessions`, `trials`, `trials_private`, `decisions`, `events`, `outcomes`, `instruments_cache` 資料表。
+     - 啟用 WAL 模式與 Foreign Key 約束；針對 `:memory:` 提供單一連線持久化以支援單元測試。
+     - 實作原子狀態版本遞增（`state_version`）與單調遞增事件序號（`sequence_no`）。
+     - 決策提交嚴格實作冪等性保護（`idempotency_key` 唯一約束，重複提交返回原結果而不重複執行）。
+     - 匯出規格符合第 10.4 節，打包包含 `manifest.json`, `instruments.json`, `decisions.json`, `events.jsonl`, `outcomes.json`, `private_replay.json` 之 ZIP 封裝。
+  2. 實驗業務服務（`LabService`）：
+     - 依據 `protocols/pilot_v001.json` 建立試驗 Session，載入並正式驗證題庫素材。
+     - 嚴格實作參與者視角資料隔離（`get_participant_trial_view`），剔除 `expected_solution`, `hint_text`, `bomb_index`, `random_seed`。
+     - 動作執行器：Puzzle 正確處理 `continue`, `hint`, `next_step`, `solution`；BRET 正確結算點數與立即揭露結果。
+  3. FastAPI REST 端點（`app.py`）：
+     - 參與者端點：`/api/sessions/join`, `/api/trials/{id}`, `/api/trials/{id}/board`, `/api/trials/{id}/open-decision`, `/api/trials/{id}/decision`, `/api/trials/{id}/next`。
+     - 研究者端點（`X-Operator-Token` 保護）：`/api/operator/sessions`, `/api/operator/sessions/{id}`, `/api/operator/sessions/{id}/export`。
+- **來源**：Human-origin（規格要求）+ AI-origin（工程實作）
+- **影響版本**：
+  - schema: `v001`
+  - storage: `sqlite_v001`
+  - api: `v0.1.0`
+- **舊資料可比較性**：初次實作，向前相容。
+
+
