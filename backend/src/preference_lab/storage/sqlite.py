@@ -1,4 +1,4 @@
-"""SQLite transaction and event storage according to PREFERENCE_LAB_SPEC.md."""
+"""SQLite transaction, atomic decision execution, and event storage according to PREFERENCE_LAB_SPEC.md."""
 
 from __future__ import annotations
 
@@ -57,6 +57,7 @@ class Storage:
                 session_id TEXT PRIMARY KEY,
                 participant_id TEXT NOT NULL,
                 session_code TEXT UNIQUE NOT NULL,
+                session_token TEXT UNIQUE NOT NULL,
                 mode TEXT NOT NULL,
                 protocol_id TEXT NOT NULL,
                 protocol_version TEXT NOT NULL,
@@ -67,12 +68,12 @@ class Storage:
             );
 
             CREATE TABLE IF NOT EXISTS instruments_cache (
-                item_id TEXT PRIMARY KEY,
+                canonical_hash TEXT PRIMARY KEY,
+                item_id TEXT NOT NULL,
                 instrument_id TEXT NOT NULL,
                 instrument_version TEXT NOT NULL,
                 environment_id TEXT NOT NULL,
                 template_id TEXT NOT NULL,
-                canonical_hash TEXT NOT NULL,
                 data_json TEXT NOT NULL
             );
 
@@ -82,7 +83,7 @@ class Storage:
                 participant_id TEXT NOT NULL,
                 environment_id TEXT NOT NULL,
                 item_id TEXT NOT NULL,
-                instrument_hash TEXT NOT NULL,
+                instrument_hash TEXT NOT NULL REFERENCES instruments_cache(canonical_hash),
                 protocol_hash TEXT NOT NULL,
                 collection_index INTEGER NOT NULL,
                 status TEXT NOT NULL,
@@ -115,7 +116,9 @@ class Storage:
                 answered_at TEXT NOT NULL,
                 deliberation_ms INTEGER NOT NULL,
                 source TEXT NOT NULL,
-                idempotency_key TEXT UNIQUE NOT NULL
+                idempotency_key TEXT UNIQUE NOT NULL,
+                request_payload_hash TEXT NOT NULL,
+                UNIQUE(trial_id, decision_index)
             );
 
             CREATE TABLE IF NOT EXISTS events (
@@ -141,10 +144,11 @@ class Storage:
 
             CREATE INDEX IF NOT EXISTS idx_events_session_seq ON events(session_id, sequence_no);
             CREATE INDEX IF NOT EXISTS idx_trials_session ON trials(session_id, collection_index);
-            """)
+            CREATE INDEX IF NOT EXISTS idx_inst_item_id ON instruments_cache(item_id);
+        """)
 
     def save_instrument(self, instrument: Instrument) -> str:
-        """Cache an instrument and return its canonical SHA-256 hash."""
+        """Cache an instrument by its immutable canonical SHA-256 hash."""
         data_dict = instrument.model_dump()
         canonical_hash = sha256_canonical_json(data_dict)
         data_json = canonical_json_str(data_dict)
@@ -152,57 +156,57 @@ class Storage:
         with self._get_connection() as conn:
             conn.execute(
                 """
-                INSERT INTO instruments_cache (item_id, instrument_id, instrument_version, environment_id, template_id, canonical_hash, data_json)
+                INSERT INTO instruments_cache (canonical_hash, item_id, instrument_id, instrument_version, environment_id, template_id, data_json)
                 VALUES (?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(item_id) DO UPDATE SET
-                    instrument_id=excluded.instrument_id,
-                    instrument_version=excluded.instrument_version,
-                    environment_id=excluded.environment_id,
-                    template_id=excluded.template_id,
-                    canonical_hash=excluded.canonical_hash,
+                ON CONFLICT(canonical_hash) DO UPDATE SET
                     data_json=excluded.data_json;
                 """,
                 (
+                    canonical_hash,
                     instrument.item_id,
                     instrument.instrument_id,
                     instrument.instrument_version,
                     instrument.environment_id,
                     instrument.template_id,
-                    canonical_hash,
                     data_json,
                 ),
             )
         return canonical_hash
 
-    def get_instrument(self, item_id: str) -> Instrument | None:
+    def get_instrument_by_hash(self, canonical_hash: str) -> Instrument | None:
+        """Fetch instrument strictly by its immutable canonical hash."""
         with self._get_connection() as conn:
             row = conn.execute(
-                "SELECT data_json FROM instruments_cache WHERE item_id = ?",
+                "SELECT data_json FROM instruments_cache WHERE canonical_hash = ?",
+                (canonical_hash,),
+            ).fetchone()
+            if not row:
+                return None
+            return Instrument.model_validate(json.loads(row["data_json"]))
+
+    def get_instrument(self, item_id: str) -> Instrument | None:
+        """Fetch latest instrument for item_id."""
+        with self._get_connection() as conn:
+            row = conn.execute(
+                "SELECT data_json FROM instruments_cache WHERE item_id = ? ORDER BY rowid DESC LIMIT 1",
                 (item_id,),
             ).fetchone()
             if not row:
                 return None
             return Instrument.model_validate(json.loads(row["data_json"]))
 
-    def get_instrument_hash(self, item_id: str) -> str | None:
-        with self._get_connection() as conn:
-            row = conn.execute(
-                "SELECT canonical_hash FROM instruments_cache WHERE item_id = ?",
-                (item_id,),
-            ).fetchone()
-            return row["canonical_hash"] if row else None
-
     def create_session(self, session: Session) -> Session:
         with self._get_connection() as conn:
             conn.execute(
                 """
-                INSERT INTO sessions (session_id, participant_id, session_code, mode, protocol_id, protocol_version, environment_order, status, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO sessions (session_id, participant_id, session_code, session_token, mode, protocol_id, protocol_version, environment_order, status, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     session.session_id,
                     session.participant_id,
                     session.session_code,
+                    session.session_token,
                     session.mode,
                     session.protocol_id,
                     session.protocol_version,
@@ -224,6 +228,7 @@ class Storage:
                 session_id=row["session_id"],
                 participant_id=row["participant_id"],
                 session_code=row["session_code"],
+                session_token=row["session_token"],
                 mode=row["mode"],
                 protocol_id=row["protocol_id"],
                 protocol_version=row["protocol_version"],
@@ -244,6 +249,28 @@ class Storage:
                 session_id=row["session_id"],
                 participant_id=row["participant_id"],
                 session_code=row["session_code"],
+                session_token=row["session_token"],
+                mode=row["mode"],
+                protocol_id=row["protocol_id"],
+                protocol_version=row["protocol_version"],
+                environment_order=json.loads(row["environment_order"]),
+                status=row["status"],
+                created_at=row["created_at"],
+                completed_at=row["completed_at"],
+            )
+
+    def get_session_by_token(self, session_token: str) -> Session | None:
+        with self._get_connection() as conn:
+            row = conn.execute(
+                "SELECT * FROM sessions WHERE session_token = ?", (session_token,)
+            ).fetchone()
+            if not row:
+                return None
+            return Session(
+                session_id=row["session_id"],
+                participant_id=row["participant_id"],
+                session_code=row["session_code"],
+                session_token=row["session_token"],
                 mode=row["mode"],
                 protocol_id=row["protocol_id"],
                 protocol_version=row["protocol_version"],
@@ -261,6 +288,7 @@ class Storage:
                     session_id=row["session_id"],
                     participant_id=row["participant_id"],
                     session_code=row["session_code"],
+                    session_token=row["session_token"],
                     mode=row["mode"],
                     protocol_id=row["protocol_id"],
                     protocol_version=row["protocol_version"],
@@ -417,7 +445,6 @@ class Storage:
         timestamp = get_utc_now_iso()
 
         with self._get_connection() as conn:
-            # Monotonically increasing sequence_no per session
             row = conn.execute(
                 "SELECT COALESCE(MAX(sequence_no), 0) + 1 AS next_seq FROM events WHERE session_id = ?",
                 (session_id,),
@@ -460,21 +487,109 @@ class Storage:
         idempotency_key: str,
         valid_action_ids: set[str] | list[str],
     ) -> tuple[DecisionRecord, bool]:
-        """Atomically commit a decision with strict validation and idempotency check.
+        """Commit a decision record with idempotency and uniqueness checks."""
+        validate_decision_record(record, valid_action_ids)
+        request_payload_hash = sha256_canonical_json({
+            "trial_id": record.trial_id,
+            "acceptable_by_action": record.acceptable_by_action,
+            "selected_action_id": record.selected_action_id,
+            "preferred_action_ids": record.preferred_action_ids,
+            "deliberation_ms": record.deliberation_ms,
+            "selection_acceptability_override": record.selection_acceptability_override,
+        })
+        with self._get_connection() as conn:
+            existing = conn.execute(
+                "SELECT * FROM decisions WHERE idempotency_key = ?", (idempotency_key,)
+            ).fetchone()
+            if existing:
+                if existing["request_payload_hash"] != request_payload_hash:
+                    raise ValueError("Idempotency key collision with different request payload")
+                return DecisionRecord(
+                    decision_id=existing["decision_id"],
+                    trial_id=existing["trial_id"],
+                    decision_index=existing["decision_index"],
+                    public_observation_snapshot=json.loads(existing["public_observation_snapshot"]),
+                    observation_hash=existing["observation_hash"],
+                    acceptable_by_action=json.loads(existing["acceptable_by_action"]),
+                    selected_action_id=existing["selected_action_id"],
+                    preferred_action_ids=json.loads(existing["preferred_action_ids"]) if existing["preferred_action_ids"] else None,
+                    reason=existing["reason"],
+                    selection_acceptability_override=bool(existing["selection_acceptability_override"]),
+                    answered_at=existing["answered_at"],
+                    deliberation_ms=existing["deliberation_ms"],
+                    source=existing["source"],
+                ), False
 
-        Returns (DecisionRecord, is_new: bool). If idempotency_key was already used,
-        returns the existing DecisionRecord without re-executing.
+            conn.execute(
+                """
+                INSERT INTO decisions (
+                    decision_id, trial_id, decision_index, public_observation_snapshot,
+                    observation_hash, acceptable_by_action, selected_action_id,
+                    preferred_action_ids, reason, selection_acceptability_override,
+                    answered_at, deliberation_ms, source, idempotency_key, request_payload_hash
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    record.decision_id,
+                    record.trial_id,
+                    record.decision_index,
+                    json.dumps(record.public_observation_snapshot),
+                    record.observation_hash,
+                    json.dumps(record.acceptable_by_action),
+                    record.selected_action_id,
+                    json.dumps(record.preferred_action_ids) if record.preferred_action_ids else None,
+                    record.reason,
+                    1 if record.selection_acceptability_override else 0,
+                    record.answered_at,
+                    record.deliberation_ms,
+                    record.source,
+                    idempotency_key,
+                    request_payload_hash,
+                ),
+            )
+            return record, True
+
+    def commit_decision_atomic(
+        self,
+        record: DecisionRecord,
+        idempotency_key: str,
+        valid_action_ids: set[str] | list[str],
+        expected_state_version: int,
+        new_public_state: dict[str, Any],
+        new_status: str,
+        outcome: Outcome,
+        event_payload: dict[str, Any],
+    ) -> tuple[DecisionRecord, bool, int, Outcome]:
+        """Commit decision, update trial status, record outcome, and record event in ONE ATOMIC TRANSACTION.
+
+        Enforces:
+        - Must be in 'decision_open' status.
+        - UNIQUE(trial_id, decision_index) in database.
+        - Idempotency key payload matching.
+        - Rollback on any failure.
         """
         validate_decision_record(record, valid_action_ids)
+        request_payload_hash = sha256_canonical_json({
+            "trial_id": record.trial_id,
+            "acceptable_by_action": record.acceptable_by_action,
+            "selected_action_id": record.selected_action_id,
+            "preferred_action_ids": record.preferred_action_ids,
+            "deliberation_ms": record.deliberation_ms,
+            "selection_acceptability_override": record.selection_acceptability_override,
+        })
 
         with self._get_connection() as conn:
-            # Check existing idempotency
+            # 1. Check idempotency
             existing = conn.execute(
                 "SELECT * FROM decisions WHERE idempotency_key = ?",
                 (idempotency_key,),
             ).fetchone()
 
             if existing:
+                if existing["request_payload_hash"] != request_payload_hash:
+                    raise ValueError(
+                        "Idempotency key collision with different request payload"
+                    )
                 existing_record = DecisionRecord(
                     decision_id=existing["decision_id"],
                     trial_id=existing["trial_id"],
@@ -498,16 +613,55 @@ class Storage:
                     deliberation_ms=existing["deliberation_ms"],
                     source=existing["source"],
                 )
-                return existing_record, False
+                row_out = conn.execute(
+                    "SELECT * FROM outcomes WHERE trial_id = ?", (record.trial_id,)
+                ).fetchone()
+                existing_outcome = (
+                    Outcome(
+                        outcome_id=row_out["outcome_id"],
+                        trial_id=row_out["trial_id"],
+                        action_id=row_out["action_id"],
+                        executed_payload=json.loads(row_out["executed_payload"]),
+                        result_summary=json.loads(row_out["result_summary"]),
+                        completed_at=row_out["completed_at"],
+                    )
+                    if row_out
+                    else outcome
+                )
+                trial_row = conn.execute(
+                    "SELECT state_version FROM trials WHERE trial_id = ?",
+                    (record.trial_id,),
+                ).fetchone()
+                return existing_record, False, trial_row["state_version"], existing_outcome
 
+            # 2. Check trial status and state version
+            trial_row = conn.execute(
+                "SELECT session_id, status, state_version, active_play_ms FROM trials WHERE trial_id = ?",
+                (record.trial_id,),
+            ).fetchone()
+            if not trial_row:
+                raise ValueError(f"Trial {record.trial_id} not found")
+            if trial_row["status"] != "decision_open":
+                raise ValueError(
+                    f"Cannot commit decision for trial in status '{trial_row['status']}'; status must be 'decision_open'"
+                )
+            if trial_row["state_version"] != expected_state_version:
+                raise ValueError(
+                    f"State version conflict: expected {expected_state_version}, got {trial_row['state_version']}"
+                )
+
+            session_id = trial_row["session_id"]
+            new_state_version = expected_state_version + 1
+
+            # 3. Insert Decision
             conn.execute(
                 """
                 INSERT INTO decisions (
                     decision_id, trial_id, decision_index, public_observation_snapshot,
                     observation_hash, acceptable_by_action, selected_action_id,
                     preferred_action_ids, reason, selection_acceptability_override,
-                    answered_at, deliberation_ms, source, idempotency_key
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    answered_at, deliberation_ms, source, idempotency_key, request_payload_hash
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     record.decision_id,
@@ -528,10 +682,69 @@ class Storage:
                     record.deliberation_ms,
                     record.source,
                     idempotency_key,
+                    request_payload_hash,
                 ),
             )
 
-        return record, True
+            # 4. Update Trial status and state
+            conn.execute(
+                """
+                UPDATE trials
+                SET public_state = ?, status = ?, state_version = ?
+                WHERE trial_id = ?
+                """,
+                (
+                    json.dumps(new_public_state),
+                    new_status,
+                    new_state_version,
+                    record.trial_id,
+                ),
+            )
+
+            # 5. Insert Outcome
+            conn.execute(
+                """
+                INSERT INTO outcomes (outcome_id, trial_id, action_id, executed_payload, result_summary, completed_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    outcome.outcome_id,
+                    outcome.trial_id,
+                    outcome.action_id,
+                    json.dumps(outcome.executed_payload),
+                    json.dumps(outcome.result_summary),
+                    outcome.completed_at,
+                ),
+            )
+
+            # 6. Insert Event
+            event_id = f"evt_{uuid.uuid4().hex[:12]}"
+            timestamp = get_utc_now_iso()
+            row_seq = conn.execute(
+                "SELECT COALESCE(MAX(sequence_no), 0) + 1 AS next_seq FROM events WHERE session_id = ?",
+                (session_id,),
+            ).fetchone()
+            seq_no = row_seq["next_seq"]
+
+            conn.execute(
+                """
+                INSERT INTO events (event_id, session_id, trial_id, sequence_no, timestamp_utc, event_type, payload, state_version_before, state_version_after)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    event_id,
+                    session_id,
+                    record.trial_id,
+                    seq_no,
+                    timestamp,
+                    "decision_committed",
+                    json.dumps(event_payload),
+                    expected_state_version,
+                    new_state_version,
+                ),
+            )
+
+        return record, True, new_state_version, outcome
 
     def get_decision(self, trial_id: str) -> DecisionRecord | None:
         with self._get_connection() as conn:
@@ -624,7 +837,7 @@ class Storage:
 
         Files included:
         - manifest.json
-        - instruments.json
+        - instruments.json (strictly fetched by trial.instrument_hash)
         - decisions.json
         - events.jsonl
         - outcomes.json
@@ -643,10 +856,10 @@ class Storage:
         instruments_dict = {}
 
         for trial in trials:
-            # Instrument snapshot
-            inst = self.get_instrument(trial.item_id)
+            # Immutable instrument snapshot by hash
+            inst = self.get_instrument_by_hash(trial.instrument_hash)
             if inst:
-                instruments_dict[trial.item_id] = inst.model_dump()
+                instruments_dict[trial.instrument_hash] = inst.model_dump()
 
             # Decision
             dec = self.get_decision(trial.trial_id)
@@ -664,6 +877,7 @@ class Storage:
                 {
                     "trial_id": trial.trial_id,
                     "item_id": trial.item_id,
+                    "instrument_hash": trial.instrument_hash,
                     "bomb_index": tp.bomb_index if tp else None,
                     "random_seed": tp.random_seed if tp else None,
                     "internal_state": tp.internal_state if tp else {},

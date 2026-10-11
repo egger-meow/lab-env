@@ -3,28 +3,29 @@
 from __future__ import annotations
 
 import random
-from pydantic import BaseModel, Field
+from typing import Any
+from pydantic import BaseModel, Field, StrictInt
 
 
 class BretActionOption(BaseModel):
     action_id: str
-    k: int
+    k: StrictInt
     label: str
 
 
 class BretPublicStimulus(BaseModel):
-    num_boxes: int  # N
-    reward_per_box: int  # r
+    num_boxes: StrictInt  # N
+    reward_per_box: StrictInt  # r
     options: list[BretActionOption]  # 4 action options (e.g. collect_0, collect_low, collect_mid, collect_high)
 
 
 class BretEvaluationResult(BaseModel):
-    k: int
-    num_boxes: int
-    reward_per_box: int
+    k: StrictInt
+    num_boxes: StrictInt
+    reward_per_box: StrictInt
     hit_probability: float
-    payoff_if_safe: int
-    payoff_if_hit: int
+    payoff_if_safe: StrictInt
+    payoff_if_hit: StrictInt
     expected_payoff: float
 
 

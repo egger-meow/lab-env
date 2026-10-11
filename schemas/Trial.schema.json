@@ -45,6 +45,7 @@
         "executing",
         "completed",
         "completed_without_decision",
+        "paused",
         "skipped",
         "aborted"
       ],

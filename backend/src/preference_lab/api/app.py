@@ -10,6 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 from preference_lab.api.service import LabService
+from preference_lab.domain.schemas import Trial
 from preference_lab.storage.sqlite import Storage
 
 OPERATOR_TOKEN = os.environ.get("PREFERENCE_LAB_OPERATOR_TOKEN", "dev-operator-token-local")
@@ -53,6 +54,37 @@ def verify_operator_token(x_operator_token: str | None = Header(None)) -> None:
         )
 
 
+def verify_participant_trial(
+    trial_id: str,
+    x_session_token: str | None = Header(None),
+    service: LabService = Depends(get_service),
+) -> Trial:
+    """Authenticate participant and verify trial belongs to the caller's session."""
+    if not x_session_token:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Missing X-Session-Token header",
+        )
+    session = service.storage.get_session_by_token(x_session_token)
+    if not session:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid participant session token",
+        )
+    trial = service.storage.get_trial(trial_id)
+    if not trial:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Trial {trial_id} not found",
+        )
+    if trial.session_id != session.session_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Trial does not belong to the authenticated session",
+        )
+    return trial
+
+
 # --- Request & Response Models ---
 
 class JoinSessionRequest(BaseModel):
@@ -82,6 +114,47 @@ class CommitDecisionRequest(BaseModel):
 
 class NextTrialRequest(BaseModel):
     session_id: str
+
+
+class PauseTrialRequest(BaseModel):
+    active_play_ms: int
+    state_version: int
+
+
+class ResumeTrialRequest(BaseModel):
+    state_version: int
+
+
+class SkipTrialRequest(BaseModel):
+    reason: str | None = None
+    active_play_ms: int = 0
+    state_version: int = 1
+
+
+class AbortTrialRequest(BaseModel):
+    reason: str | None = None
+    active_play_ms: int = 0
+    state_version: int = 1
+
+
+class DemonstrationStepRequest(BaseModel):
+    step_index: int
+    state_version: int
+
+
+class ComprehensionSubmitRequest(BaseModel):
+    answers: dict[str, str]
+    deliberation_ms: int = 0
+    state_version: int = 1
+
+
+class FeedbackSubmitRequest(BaseModel):
+    feedback: dict[str, Any]
+    state_version: int = 1
+
+
+class SolutionFollowupRequest(BaseModel):
+    state_version: int = 1
 
 
 class CreateSessionRequest(BaseModel):
@@ -115,13 +188,13 @@ def join_session(
         )
 
     trials = service.storage.get_trials_for_session(session.session_id)
-    # Find current active trial
     active_trial = next((t for t in trials if t.status in ("active", "decision_open")), None)
     if not active_trial and trials:
         active_trial = trials[0]
 
     return {
         "session": session.model_dump(),
+        "session_token": session.session_token,
         "current_trial_id": active_trial.trial_id if active_trial else None,
         "total_trials": len(trials),
     }
@@ -130,6 +203,7 @@ def join_session(
 @app.get("/api/trials/{trial_id}")
 def get_trial(
     trial_id: str,
+    _auth_trial: Trial = Depends(verify_participant_trial),
     service: LabService = Depends(get_service),
 ) -> dict[str, Any]:
     try:
@@ -142,6 +216,7 @@ def get_trial(
 def update_board(
     trial_id: str,
     payload: UpdateBoardRequest,
+    _auth_trial: Trial = Depends(verify_participant_trial),
     service: LabService = Depends(get_service),
 ) -> dict[str, Any]:
     try:
@@ -159,6 +234,7 @@ def update_board(
 def open_decision(
     trial_id: str,
     payload: OpenDecisionRequest,
+    _auth_trial: Trial = Depends(verify_participant_trial),
     service: LabService = Depends(get_service),
 ) -> dict[str, Any]:
     try:
@@ -175,6 +251,7 @@ def open_decision(
 def commit_decision(
     trial_id: str,
     payload: CommitDecisionRequest,
+    _auth_trial: Trial = Depends(verify_participant_trial),
     service: LabService = Depends(get_service),
 ) -> dict[str, Any]:
     try:
@@ -196,12 +273,155 @@ def commit_decision(
 def next_trial(
     trial_id: str,
     payload: NextTrialRequest,
+    auth_trial: Trial = Depends(verify_participant_trial),
     service: LabService = Depends(get_service),
 ) -> dict[str, Any]:
+    if payload.session_id != auth_trial.session_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Session ID in payload does not match trial session",
+        )
     try:
         return service.next_trial(
             session_id=payload.session_id,
             current_trial_id=trial_id,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+
+@app.post("/api/trials/{trial_id}/pause")
+def pause_trial(
+    trial_id: str,
+    payload: PauseTrialRequest,
+    _auth_trial: Trial = Depends(verify_participant_trial),
+    service: LabService = Depends(get_service),
+) -> dict[str, Any]:
+    try:
+        return service.pause_trial(
+            trial_id=trial_id,
+            active_play_ms=payload.active_play_ms,
+            expected_state_version=payload.state_version,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+
+@app.post("/api/trials/{trial_id}/resume")
+def resume_trial(
+    trial_id: str,
+    payload: ResumeTrialRequest,
+    _auth_trial: Trial = Depends(verify_participant_trial),
+    service: LabService = Depends(get_service),
+) -> dict[str, Any]:
+    try:
+        return service.resume_trial(
+            trial_id=trial_id,
+            expected_state_version=payload.state_version,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+
+@app.post("/api/trials/{trial_id}/skip")
+def skip_trial(
+    trial_id: str,
+    payload: SkipTrialRequest,
+    _auth_trial: Trial = Depends(verify_participant_trial),
+    service: LabService = Depends(get_service),
+) -> dict[str, Any]:
+    try:
+        return service.skip_trial(
+            trial_id=trial_id,
+            reason=payload.reason,
+            active_play_ms=payload.active_play_ms,
+            expected_state_version=payload.state_version,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+
+@app.post("/api/trials/{trial_id}/abort")
+def abort_trial(
+    trial_id: str,
+    payload: AbortTrialRequest,
+    _auth_trial: Trial = Depends(verify_participant_trial),
+    service: LabService = Depends(get_service),
+) -> dict[str, Any]:
+    try:
+        return service.abort_trial(
+            trial_id=trial_id,
+            reason=payload.reason,
+            active_play_ms=payload.active_play_ms,
+            expected_state_version=payload.state_version,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+
+@app.post("/api/trials/{trial_id}/demonstration")
+def step_demonstration(
+    trial_id: str,
+    payload: DemonstrationStepRequest,
+    _auth_trial: Trial = Depends(verify_participant_trial),
+    service: LabService = Depends(get_service),
+) -> dict[str, Any]:
+    try:
+        return service.step_demonstration(
+            trial_id=trial_id,
+            step_index=payload.step_index,
+            expected_state_version=payload.state_version,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+
+@app.post("/api/trials/{trial_id}/comprehension")
+def submit_comprehension(
+    trial_id: str,
+    payload: ComprehensionSubmitRequest,
+    _auth_trial: Trial = Depends(verify_participant_trial),
+    service: LabService = Depends(get_service),
+) -> dict[str, Any]:
+    try:
+        return service.submit_comprehension(
+            trial_id=trial_id,
+            answers=payload.answers,
+            deliberation_ms=payload.deliberation_ms,
+            expected_state_version=payload.state_version,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+
+@app.post("/api/trials/{trial_id}/feedback")
+def submit_trial_feedback(
+    trial_id: str,
+    payload: FeedbackSubmitRequest,
+    _auth_trial: Trial = Depends(verify_participant_trial),
+    service: LabService = Depends(get_service),
+) -> dict[str, Any]:
+    try:
+        return service.submit_trial_feedback(
+            trial_id=trial_id,
+            feedback=payload.feedback,
+            expected_state_version=payload.state_version,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+
+@app.post("/api/trials/{trial_id}/solution-followup")
+def reveal_solution_followup(
+    trial_id: str,
+    payload: SolutionFollowupRequest,
+    _auth_trial: Trial = Depends(verify_participant_trial),
+    service: LabService = Depends(get_service),
+) -> dict[str, Any]:
+    try:
+        return service.reveal_solution_followup(
+            trial_id=trial_id,
+            expected_state_version=payload.state_version,
         )
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))

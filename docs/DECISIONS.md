@@ -67,4 +67,41 @@
   - api: `v0.1.0`
 - **舊資料可比較性**：初次實作，向前相容。
 
+---
+
+## 2026-10-11: Part B 程式審查修正 (Review Fixes: Auth, Atomicity, Idempotency, Tutorial Isolation)
+
+- **日期**：2026-10-11
+- **修改內容**：
+  1. 參與者端點身分驗證與 Session Token (P1)：
+     - `Session` 增加 `session_token` 欄位；`/api/sessions/join` 正式回傳 `session_token`。
+     - 參與者端點實作 `verify_participant_trial` 依賴注入，檢查 `X-Session-Token` Header，嚴格驗證 Token 有效性並阻擋跨 Session 存取 (401 / 403)。
+  2. 決策狀態檢查與唯一性限制 (P1)：
+     - 僅允許 `status == "decision_open"` 提交決策；非此狀態直接拒絕 (400)。
+     - 資料庫加上 `UNIQUE(trial_id, decision_index)` 約束；記錄 `request_payload_hash`。
+     - 相同 key 且相同內容視為合法冪等重送；相同 key 但不同內容拋出衝突錯誤 (400)；不同 key 嘗試二次提交受 UNIQUE 約束阻擋。
+  3. 決策與後果執行之單一交易原子性 (P1)：
+     - 實作 `commit_decision_atomic`，將決策寫入、試驗狀態更新、後果寫入、事件記錄全部包裝在單一 SQLite 交易中。
+     - 測試證明若中途任何步驟失敗，所有變更自動 rollback，零殘留孤立記錄或破損狀態。
+  4. 題目切換合法性守門與冪等性 (P1)：
+     - `/next` 端點強制檢查當前題目必須處於合法終態 (`completed`, `completed_without_decision`, `skipped`, `aborted`)，否則拒絕 (400)。
+     - 重複呼叫 `/next` 具備冪等性，安全返回下一題 ID，絕不覆寫或重置下一題已累積的 `active_play_ms` 與狀態。
+  5. BRET 教學與示範題隔離 (P1)：
+     - 教學題（`is_tutorial=True`）不進行隨機炸彈抽樣，且嚴格禁止主要偏好提交 `/decision` (400)。
+     - 接入固定展示步進端點 `/demonstration` 與理解確認端點 `/comprehension`，完成固定教學流程。
+  6. 題目不可變快照（按 Hash 鎖定） (P1)：
+     - `instruments_cache` 表以 `canonical_hash` 為主鍵，不可變快照保存。試驗運行、資料檢視與 Session ZIP 匯出全部依 `trial.instrument_hash` 讀取，徹底杜絕新版本覆蓋舊試驗題目的問題。
+  7. 獨立公開觀察快照與解謎完成標記修正：
+     - `public_observation_snapshot` 擴充納入原始線索 `public_stimulus`（包含 puzzle clues/items 或 BRET options）、完整 `action_specs`、`display_order` 與目前狀態。
+     - 解謎完成判斷：依據試驗是否曾提交主要決策區分標記為 `completed` 或 `completed_without_decision`。
+  8. 完整流程端點擴充：
+     - 補齊 `pause`, `resume`, `skip`, `abort`, `feedback`, `solution-followup` 端點與對應事件發射；`Trial.status` 補齊 `paused`。
+     - Pydantic 模型及 BRET 欄位採用 `StrictInt`，嚴格阻絕 `bool` 與 `float` 繞過。
+- **來源**：Human-origin（審查意見與反例要求）+ AI-origin（工程實作與完整反例測試案例）
+- **影響版本**：
+  - schema: `v001`
+  - storage: `sqlite_v001`
+  - api: `v0.1.0`
+- **舊資料可比較性**：向前相容，修正可靠性漏洞與狀態機邊界。
+
 

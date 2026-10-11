@@ -12,6 +12,10 @@
       "title": "Session Code",
       "type": "string"
     },
+    "session_token": {
+      "title": "Session Token",
+      "type": "string"
+    },
     "mode": {
       "default": "pilot",
       "enum": [
@@ -69,6 +73,7 @@
     "session_id",
     "participant_id",
     "session_code",
+    "session_token",
     "protocol_id",
     "protocol_version",
     "environment_order",
