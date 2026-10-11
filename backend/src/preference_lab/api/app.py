@@ -97,6 +97,12 @@ class UpdateBoardRequest(BaseModel):
     state_version: int
 
 
+class CheckAnswerRequest(BaseModel):
+    active_play_ms: int
+    state_version: int
+    board: list[str | None] | None = None
+
+
 class OpenDecisionRequest(BaseModel):
     active_play_ms: int
     state_version: int
@@ -246,6 +252,24 @@ def update_board(
             board=payload.board,
             active_play_ms=payload.active_play_ms,
             expected_state_version=payload.state_version,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+
+@app.post("/api/trials/{trial_id}/check-answer")
+def check_answer(
+    trial_id: str,
+    payload: CheckAnswerRequest,
+    _auth_trial: Trial = Depends(verify_participant_trial),
+    service: LabService = Depends(get_service),
+) -> dict[str, Any]:
+    try:
+        return service.check_puzzle_answer(
+            trial_id=trial_id,
+            active_play_ms=payload.active_play_ms,
+            expected_state_version=payload.state_version,
+            board=payload.board,
         )
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
@@ -506,6 +530,7 @@ def get_session_operator(
     return {
         "session": session.model_dump(),
         "trials": trials_data,
+        "events": [e.model_dump() for e in events],
         "event_count": len(events),
     }
 

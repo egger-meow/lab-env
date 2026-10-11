@@ -257,8 +257,20 @@ def test_puzzle_completion_without_decision_vs_with_decision(client):
         json={"board": sol_board, "active_play_ms": 5000, "state_version": 1},
     )
     assert res_solve_direct.status_code == 200
-    assert res_solve_direct.json()["is_solved"] is True
-    assert res_solve_direct.json()["status"] == "completed_without_decision"
+    # Saving board alone must NOT complete trial or reveal is_solved!
+    assert res_solve_direct.json()["status"] == "active"
+    assert "is_solved" not in res_solve_direct.json()
+
+    # Explicit check-answer evaluates board and completes trial
+    res_check = client.post(
+        f"/api/trials/{trial_id}/check-answer",
+        headers=headers,
+        json={"active_play_ms": 5500, "state_version": res_solve_direct.json()["state_version"]},
+    )
+    assert res_check.status_code == 200
+    assert res_check.json()["is_solved"] is True
+    assert res_check.json()["status"] == "completed_without_decision"
+    assert res_check.json()["attempts"] == 1
 
 
 def test_next_trial_guards_and_idempotency(client):
@@ -829,4 +841,245 @@ def test_atomic_trial_ended_events_across_lifecycle(client):
         seqs = [e["sequence_no"] for e in events]
         assert seqs == sorted(seqs)
         assert len(seqs) == len(set(seqs))
+
+
+def test_board_update_does_not_reveal_correctness_or_increment_attempts(client):
+    """P1: /board saves board layout without checking correctness, incrementing attempts, or completing trial."""
+    op_res = client.post(
+        "/api/operator/sessions",
+        headers={"X-Operator-Token": OPERATOR_TOKEN},
+        json={"mode": "pilot", "environment_order": ["puzzle_hints"]},
+    )
+    session_id = op_res.json()["session"]["session_id"]
+    session_code = op_res.json()["session"]["session_code"]
+    trial_id = op_res.json()["first_trial_id"]
+
+    join_res = client.post("/api/sessions/join", json={"session_code": session_code})
+    headers = {"X-Session-Token": join_res.json()["session_token"]}
+
+    # Submit correct solution to /board directly
+    sol_board = ["moon", "key", "star", "leaf"]
+    res_b = client.post(
+        f"/api/trials/{trial_id}/board",
+        headers=headers,
+        json={"board": sol_board, "active_play_ms": 3000, "state_version": 1},
+    )
+    assert res_b.status_code == 200
+    b_data = res_b.json()
+
+    # 1. Status remains active (not completed_without_decision!)
+    assert b_data["status"] == "active"
+    # 2. Does not leak is_solved or status_message in response
+    assert "is_solved" not in b_data
+    assert "status_message" not in b_data
+    # 3. Attempts count not incremented (0)
+    assert b_data["public_state"].get("attempts", 0) == 0
+
+    # 4. In events, only board_changed exists (no answer_checked, no trial_ended)
+    sess_detail = client.get(
+        f"/api/operator/sessions/{session_id}",
+        headers={"X-Operator-Token": OPERATOR_TOKEN},
+    ).json()
+    trial_events = [e for e in sess_detail["events"] if e["trial_id"] == trial_id]
+    ev_types = [e["event_type"] for e in trial_events]
+    assert "board_changed" in ev_types
+    assert "answer_checked" not in ev_types
+    assert "trial_ended" not in ev_types
+
+
+def test_explicit_check_answer_evaluates_solution_and_increments_attempts(client):
+    """P1: Only explicit /check-answer provides feedback, increments attempts, and completes trial."""
+    op_res = client.post(
+        "/api/operator/sessions",
+        headers={"X-Operator-Token": OPERATOR_TOKEN},
+        json={"mode": "pilot", "environment_order": ["puzzle_hints"]},
+    )
+    session_id = op_res.json()["session"]["session_id"]
+    session_code = op_res.json()["session"]["session_code"]
+    trial_id = op_res.json()["first_trial_id"]
+
+    join_res = client.post("/api/sessions/join", json={"session_code": session_code})
+    headers = {"X-Session-Token": join_res.json()["session_token"]}
+
+    # 1. Check answer on incorrect / partial board
+    res_check_wrong = client.post(
+        f"/api/trials/{trial_id}/check-answer",
+        headers=headers,
+        json={"active_play_ms": 1500, "state_version": 1, "board": ["moon", "leaf", None, None]},
+    )
+    assert res_check_wrong.status_code == 200
+    wrong_data = res_check_wrong.json()
+    assert wrong_data["is_solved"] is False
+    assert wrong_data["status"] == "active"
+    assert wrong_data["attempts"] == 1
+    assert "status_message" in wrong_data
+
+    # 2. Check answer on correct board
+    sol_board = ["moon", "key", "star", "leaf"]
+    res_check_correct = client.post(
+        f"/api/trials/{trial_id}/check-answer",
+        headers=headers,
+        json={"active_play_ms": 3000, "state_version": wrong_data["state_version"], "board": sol_board},
+    )
+    assert res_check_correct.status_code == 200
+    corr_data = res_check_correct.json()
+    assert corr_data["is_solved"] is True
+    assert corr_data["status"] == "completed_without_decision"
+    assert corr_data["attempts"] == 2
+
+    # 3. Exactly one trial_ended event recorded upon completion
+    sess_detail = client.get(
+        f"/api/operator/sessions/{session_id}",
+        headers={"X-Operator-Token": OPERATOR_TOKEN},
+    ).json()
+    ended_events = [e for e in sess_detail["events"] if e["trial_id"] == trial_id and e["event_type"] == "trial_ended"]
+    assert len(ended_events) == 1
+
+
+def test_decision_open_freezes_board_and_play_time(client):
+    """P1: During decision_open, board updates and active_play_ms modification are rejected."""
+    op_res = client.post(
+        "/api/operator/sessions",
+        headers={"X-Operator-Token": OPERATOR_TOKEN},
+        json={"mode": "pilot", "environment_order": ["puzzle_hints"]},
+    )
+    session_code = op_res.json()["session"]["session_code"]
+    trial_id = op_res.json()["first_trial_id"]
+
+    join_res = client.post("/api/sessions/join", json={"session_code": session_code})
+    headers = {"X-Session-Token": join_res.json()["session_token"]}
+
+    # Play for 100ms
+    res_b = client.post(
+        f"/api/trials/{trial_id}/board",
+        headers=headers,
+        json={"board": ["moon", None, None, None], "active_play_ms": 100, "state_version": 1},
+    )
+    assert res_b.status_code == 200
+
+    # Open decision at 100ms
+    res_open = client.post(
+        f"/api/trials/{trial_id}/open-decision",
+        headers=headers,
+        json={"active_play_ms": 100, "state_version": res_b.json()["state_version"]},
+    )
+    assert res_open.status_code == 200
+    assert res_open.json()["status"] == "decision_open"
+    open_ver = res_open.json()["state_version"]
+
+    # 1. Attempt to update board during decision_open -> 400 rejected!
+    res_b_illegal = client.post(
+        f"/api/trials/{trial_id}/board",
+        headers=headers,
+        json={"board": ["moon", "key", None, None], "active_play_ms": 200, "state_version": open_ver},
+    )
+    assert res_b_illegal.status_code == 400
+    assert "Cannot update board on trial in status 'decision_open'" in res_b_illegal.json()["detail"]
+
+    # 2. Attempt to check-answer during decision_open -> 400 rejected!
+    res_check_illegal = client.post(
+        f"/api/trials/{trial_id}/check-answer",
+        headers=headers,
+        json={"active_play_ms": 200, "state_version": open_ver},
+    )
+    assert res_check_illegal.status_code == 400
+    assert "Cannot check answer on trial in status 'decision_open'" in res_check_illegal.json()["detail"]
+
+    # 3. Attempt to increase play time via pause during decision_open -> 400 rejected!
+    res_pause_illegal = client.post(
+        f"/api/trials/{trial_id}/pause",
+        headers=headers,
+        json={"active_play_ms": 200, "state_version": open_ver},
+    )
+    assert res_pause_illegal.status_code == 400
+    assert "active_play_ms is frozen during decision_open" in res_pause_illegal.json()["detail"]
+
+    # Verify trial active_play_ms remained 100
+    t_view = client.get(f"/api/trials/{trial_id}", headers=headers).json()
+    assert t_view["active_play_ms"] == 100
+
+    # 4. Commit decision 'continue' -> returns to active
+    dec_res = client.post(
+        f"/api/trials/{trial_id}/decision",
+        headers=headers,
+        json={
+            "idempotency_key": "dec_continue_key_1",
+            "acceptable_by_action": {"continue": "yes", "hint": "yes", "next_step": "yes", "solution": "yes"},
+            "selected_action_id": "continue",
+            "deliberation_ms": 1000,
+            "state_version": open_ver,
+        },
+    )
+    assert dec_res.status_code == 200
+    assert dec_res.json()["trial_status"] == "active"
+    after_ver = dec_res.json()["state_version"]
+
+    # Now that status is 'active' again, board update and playing time increase succeed!
+    res_b_after = client.post(
+        f"/api/trials/{trial_id}/board",
+        headers=headers,
+        json={"board": ["moon", "key", None, None], "active_play_ms": 150, "state_version": after_ver},
+    )
+    assert res_b_after.status_code == 200
+    assert res_b_after.json()["public_state"]["board"] == ["moon", "key", None, None]
+
+
+def test_completed_trial_feedback_and_followup_do_not_duplicate_trial_ended(client):
+    """P2: Submitting feedback and followup on completed trial must NOT record duplicate trial_ended events."""
+    op_res = client.post(
+        "/api/operator/sessions",
+        headers={"X-Operator-Token": OPERATOR_TOKEN},
+        json={"mode": "pilot", "environment_order": ["puzzle_hints"]},
+    )
+    session_id = op_res.json()["session"]["session_id"]
+    session_code = op_res.json()["session"]["session_code"]
+    trial_id = op_res.json()["first_trial_id"]
+
+    join_res = client.post("/api/sessions/join", json={"session_code": session_code})
+    headers = {"X-Session-Token": join_res.json()["session_token"]}
+
+    # Solve puzzle via check-answer
+    sol_board = ["moon", "key", "star", "leaf"]
+    res_check = client.post(
+        f"/api/trials/{trial_id}/check-answer",
+        headers=headers,
+        json={"active_play_ms": 4000, "state_version": 1, "board": sol_board},
+    )
+    assert res_check.status_code == 200
+    assert res_check.json()["status"] == "completed_without_decision"
+    v1 = res_check.json()["state_version"]
+
+    # Verify exactly 1 trial_ended event
+    def get_trial_ended_count():
+        sess = client.get(
+            f"/api/operator/sessions/{session_id}",
+            headers={"X-Operator-Token": OPERATOR_TOKEN},
+        ).json()
+        return len([e for e in sess["events"] if e["trial_id"] == trial_id and e["event_type"] == "trial_ended"])
+
+    assert get_trial_ended_count() == 1
+
+    # 1. Submit feedback
+    fb_res = client.post(
+        f"/api/trials/{trial_id}/feedback",
+        headers=headers,
+        json={"feedback": {"rating": "just_right"}, "state_version": v1},
+    )
+    assert fb_res.status_code == 200
+    v2 = fb_res.json()["state_version"]
+
+    # STILL exactly 1 trial_ended event (no duplicate created!)
+    assert get_trial_ended_count() == 1
+
+    # 2. Reveal followup solution
+    sol_res = client.post(
+        f"/api/trials/{trial_id}/solution-followup",
+        headers=headers,
+        json={"state_version": v2},
+    )
+    assert sol_res.status_code == 200
+
+    # STILL exactly 1 trial_ended event (no duplicate created!)
+    assert get_trial_ended_count() == 1
+
 

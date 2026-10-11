@@ -446,6 +446,14 @@ class Storage:
         timestamp = get_utc_now_iso()
 
         with self._get_connection() as conn:
+            row_trial = conn.execute(
+                "SELECT session_id, status FROM trials WHERE trial_id = ?", (trial_id,)
+            ).fetchone()
+            if not row_trial:
+                raise ValueError(f"Trial {trial_id} not found")
+            prev_status = row_trial["status"]
+            session_id = row_trial["session_id"]
+
             cursor = conn.execute(
                 """
                 UPDATE trials
@@ -466,13 +474,6 @@ class Storage:
                     f"State version conflict for trial {trial_id}: expected {expected_state_version}"
                 )
 
-            row_trial = conn.execute(
-                "SELECT session_id FROM trials WHERE trial_id = ?", (trial_id,)
-            ).fetchone()
-            if not row_trial:
-                raise ValueError(f"Trial {trial_id} not found")
-            session_id = row_trial["session_id"]
-
             row_seq = conn.execute(
                 "SELECT COALESCE(MAX(sequence_no), 0) + 1 AS next_seq FROM events WHERE session_id = ?",
                 (session_id,),
@@ -481,7 +482,7 @@ class Storage:
 
             all_events = list(events)
             terminal_statuses = ("completed", "completed_without_decision", "skipped", "aborted")
-            if status in terminal_statuses and not any(ev[0] == "trial_ended" for ev in all_events):
+            if prev_status not in terminal_statuses and status in terminal_statuses and not any(ev[0] == "trial_ended" for ev in all_events):
                 all_events.append(("trial_ended", {"status": status, "active_play_ms": active_play_ms}))
 
             for ev_type, ev_payload in all_events:

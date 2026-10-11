@@ -124,5 +124,22 @@
   - api: `v0.1.0`
 - **舊資料可比較性**：向前相容，全面固化真實受試者資料品質與操作可靠性。
 
+---
+
+## 2026-10-11: Part B 第三輪程式審查修正 (Review Fixes 3: Board Save vs Check Answer Separation, Decision Open Freeze, Single Trial Ended Emission)
+
+- **日期**：2026-10-11
+- **修改內容**：
+  1. 保存棋盤與檢查答案職責分離 (P1)：`/board` 僅負責保存棋盤排布與記錄 `board_changed`，不再調用 `check_board`，不回覆正誤、不洩漏提示訊息、不累加嘗試次數，亦不判定完成。新增 `/api/trials/{id}/check-answer` 作為參與者明確檢查答案的唯一入口，嚴格驗證正誤、累加 `attempts`、記錄 `answer_checked` 並在正解時判定題目完成。
+  2. 決策畫面嚴格凍結棋盤與遊玩時間 (P1)：`decision_open` 狀態下，禁止更新棋盤（`/board` 與 `/check-answer` 強制要求狀態必須為 `active`）；`/pause`、`/skip`、`/abort` 端點在 `decision_open` 時強制檢驗 `active_play_ms` 等於凍結值，杜絕決策期間遊玩時間膨脹。待主要決策提交並執行（如 `continue`/`hint`/`next_step`）恢復為 `active` 後，方可恢復遊玩操作與計時。
+  3. 終態事件單次精確發射 (P2)：修正 `update_trial_state_atomic`，在寫入更新前先行讀取 `prev_status`，限定僅在「非終態 → 終態」轉換時發射 `trial_ended`。題目已完結後提交的題末回饋 (`/feedback`) 與後續解法揭露 (`/solution-followup`) 僅記錄各自事件，杜絕多筆 `trial_ended` 重複生成。
+- **來源**：Human-origin（審查意見與反例要求）+ AI-origin（工程實作與全覆蓋測試）
+- **影響版本**：
+  - schema: `v001`
+  - storage: `sqlite_v001`
+  - api: `v0.1.0`
+- **舊資料可比較性**：向前相容，完全保真真人操作行為邊界與事件語意。
+
+
 
 

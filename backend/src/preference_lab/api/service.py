@@ -264,11 +264,19 @@ class LabService:
         active_play_ms: int,
         expected_state_version: int,
     ) -> dict[str, Any]:
+        """Save puzzle board state without checking correctness or incrementing attempts.
+
+        Guards:
+        - Board manipulation is frozen during decision_open; trial status MUST be 'active'.
+        - Validates board length, valid item IDs, no duplicates.
+        - Validates active_play_ms is non-negative and non-decreasing.
+        - Emits only 'board_changed' event. Does not reveal correctness or complete trial.
+        """
         trial = self.storage.get_trial(trial_id)
         if not trial:
             raise ValueError(f"Trial {trial_id} not found")
-        if trial.status not in ("active", "decision_open"):
-            raise ValueError(f"Cannot update board on trial in status '{trial.status}'")
+        if trial.status != "active":
+            raise ValueError(f"Cannot update board on trial in status '{trial.status}' (must be 'active')")
 
         # Time validation: cannot be negative or decrease
         if active_play_ms < 0:
@@ -293,16 +301,84 @@ class LabService:
         if len(placed_items) != len(set(placed_items)):
             raise ValueError(f"Duplicate items placed on board: {placed_items}")
 
+        public_state = dict(trial.public_state)
+        public_state["board"] = board
+
+        events = [("board_changed", {"board": board})]
+        new_version = self.storage.update_trial_state_atomic(
+            trial_id=trial_id,
+            public_state=public_state,
+            status=trial.status,
+            active_play_ms=active_play_ms,
+            expected_state_version=expected_state_version,
+            events=events,
+        )
+
+        return {
+            "status": trial.status,
+            "state_version": new_version,
+            "public_state": public_state,
+        }
+
+    def check_puzzle_answer(
+        self,
+        trial_id: str,
+        active_play_ms: int,
+        expected_state_version: int,
+        board: list[str | None] | None = None,
+    ) -> dict[str, Any]:
+        """Explicitly check puzzle answer.
+
+        Guards:
+        - Must be in 'active' status.
+        - Increments attempts count.
+        - Evaluates board with check_board.
+        - Emits 'answer_checked' event.
+        - If solved, transitions status to 'completed' or 'completed_without_decision'.
+        """
+        trial = self.storage.get_trial(trial_id)
+        if not trial:
+            raise ValueError(f"Trial {trial_id} not found")
+        if trial.status != "active":
+            raise ValueError(f"Cannot check answer on trial in status '{trial.status}' (must be 'active')")
+
+        if active_play_ms < 0:
+            raise ValueError("active_play_ms cannot be negative")
+        if active_play_ms < trial.active_play_ms:
+            raise ValueError(f"active_play_ms cannot decrease: current {trial.active_play_ms}, received {active_play_ms}")
+
+        instrument = self.storage.get_instrument_by_hash(trial.instrument_hash) or self.storage.get_instrument(trial.item_id)
+        if not instrument:
+            raise ValueError(f"Instrument {trial.item_id} not found")
+        if trial.environment_id != "puzzle_hints":
+            raise ValueError(f"check-answer only supported for puzzle_hints, got '{trial.environment_id}'")
+
+        num_pos = instrument.public_stimulus["num_positions"]
+        valid_items = set(instrument.public_stimulus["items"])
+
+        public_state = dict(trial.public_state)
+        current_board = board if board is not None else public_state.get("board", [None] * num_pos)
+
+        if len(current_board) != num_pos:
+            raise ValueError(f"Board length must be {num_pos}, got {len(current_board)}")
+
+        placed_items = [x for x in current_board if x is not None]
+        for item in placed_items:
+            if item not in valid_items:
+                raise ValueError(f"Invalid item '{item}' on board; valid items are: {sorted(valid_items)}")
+        if len(placed_items) != len(set(placed_items)):
+            raise ValueError(f"Duplicate items placed on board: {placed_items}")
+
         items = instrument.public_stimulus["items"]
         clues_raw = instrument.public_stimulus["clues"]
         from preference_lab.domain.puzzle import Clue
         clues = [Clue.model_validate(c) for c in clues_raw]
 
-        is_solved, msg = check_board(items, board, clues)
+        is_solved, msg = check_board(items, current_board, clues)
 
-        public_state = dict(trial.public_state)
-        public_state["board"] = board
-        public_state["attempts"] = public_state.get("attempts", 0) + 1
+        attempts = public_state.get("attempts", 0) + 1
+        public_state["board"] = current_board
+        public_state["attempts"] = attempts
         public_state["status_message"] = msg
         public_state["is_solved"] = is_solved
 
@@ -311,7 +387,13 @@ class LabService:
             has_decision = (self.storage.get_decision(trial_id) is not None)
             new_status = "completed" if has_decision else "completed_without_decision"
 
-        events = [("board_changed", {"board": board, "is_solved": is_solved, "status_message": msg})]
+        events = [("answer_checked", {
+            "board": current_board,
+            "is_solved": is_solved,
+            "status_message": msg,
+            "attempts": attempts,
+        })]
+
         new_version = self.storage.update_trial_state_atomic(
             trial_id=trial_id,
             public_state=public_state,
@@ -327,6 +409,7 @@ class LabService:
             "public_state": public_state,
             "is_solved": is_solved,
             "status_message": msg,
+            "attempts": attempts,
         }
 
     def open_decision(
@@ -634,6 +717,8 @@ class LabService:
             raise ValueError("active_play_ms cannot be negative")
         if active_play_ms < trial.active_play_ms:
             raise ValueError(f"active_play_ms cannot decrease: current {trial.active_play_ms}, received {active_play_ms}")
+        if trial.status == "decision_open" and active_play_ms != trial.active_play_ms:
+            raise ValueError(f"active_play_ms is frozen during decision_open; expected {trial.active_play_ms}, got {active_play_ms}")
 
         public_state = dict(trial.public_state)
         public_state["pre_pause_status"] = trial.status
@@ -689,6 +774,8 @@ class LabService:
             raise ValueError("active_play_ms cannot be negative")
         if active_play_ms < trial.active_play_ms:
             raise ValueError(f"active_play_ms cannot decrease: current {trial.active_play_ms}, received {active_play_ms}")
+        if trial.status == "decision_open" and active_play_ms != trial.active_play_ms:
+            raise ValueError(f"active_play_ms is frozen during decision_open; expected {trial.active_play_ms}, got {active_play_ms}")
 
         events = [("trial_skipped", {"reason": reason, "active_play_ms": active_play_ms})]
         new_ver = self.storage.update_trial_state_atomic(
@@ -718,6 +805,8 @@ class LabService:
             raise ValueError("active_play_ms cannot be negative")
         if active_play_ms < trial.active_play_ms:
             raise ValueError(f"active_play_ms cannot decrease: current {trial.active_play_ms}, received {active_play_ms}")
+        if trial.status == "decision_open" and active_play_ms != trial.active_play_ms:
+            raise ValueError(f"active_play_ms is frozen during decision_open; expected {trial.active_play_ms}, got {active_play_ms}")
 
         events = [("trial_aborted", {"reason": reason, "active_play_ms": active_play_ms})]
         new_ver = self.storage.update_trial_state_atomic(
