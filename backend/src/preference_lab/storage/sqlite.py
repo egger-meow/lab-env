@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 import json
+import secrets
 import sqlite3
 import uuid
 import zipfile
@@ -145,7 +146,23 @@ class Storage:
             CREATE INDEX IF NOT EXISTS idx_events_session_seq ON events(session_id, sequence_no);
             CREATE INDEX IF NOT EXISTS idx_trials_session ON trials(session_id, collection_index);
             CREATE INDEX IF NOT EXISTS idx_inst_item_id ON instruments_cache(item_id);
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_inst_canonical_hash ON instruments_cache(canonical_hash);
         """)
+
+        # Ensure backwards-compatibility for existing sqlite database files
+        session_cols = [r[1] for r in conn.execute("PRAGMA table_info(sessions)").fetchall()]
+        if "session_token" not in session_cols:
+            conn.execute("ALTER TABLE sessions ADD COLUMN session_token TEXT;")
+            rows = conn.execute("SELECT session_id FROM sessions WHERE session_token IS NULL").fetchall()
+            for row in rows:
+                token = secrets.token_urlsafe(24)
+                conn.execute("UPDATE sessions SET session_token = ? WHERE session_id = ?", (token, row["session_id"]))
+            conn.commit()
+
+        decision_cols = [r[1] for r in conn.execute("PRAGMA table_info(decisions)").fetchall()]
+        if "request_payload_hash" not in decision_cols:
+            conn.execute("ALTER TABLE decisions ADD COLUMN request_payload_hash TEXT NOT NULL DEFAULT '';")
+            conn.commit()
 
     def save_instrument(self, instrument: Instrument) -> str:
         """Cache an instrument by its immutable canonical SHA-256 hash."""
