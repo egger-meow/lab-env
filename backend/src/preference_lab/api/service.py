@@ -320,6 +320,27 @@ class LabService:
             "public_state": public_state,
         }
 
+    def checkpoint_play(self, trial_id: str, active_play_ms: int, expected_state_version: int) -> dict[str, Any]:
+        trial = self.storage.get_trial(trial_id)
+        if not trial or trial.status != "active":
+            raise ValueError("Play checkpoint requires an active trial")
+        if active_play_ms < trial.active_play_ms:
+            raise ValueError("active_play_ms cannot decrease")
+        public_state = dict(trial.public_state)
+        new_status = trial.status
+        start = public_state.get("post_decision_started_ms")
+        if start is not None and active_play_ms >= start + 45000:
+            active_play_ms = start + 45000
+            new_status = "completed"
+            public_state["followup_timeout"] = True
+        new_version = self.storage.update_trial_state_atomic(
+            trial_id=trial_id, public_state=public_state, status=new_status,
+            active_play_ms=active_play_ms, expected_state_version=expected_state_version,
+            events=[("play_checkpoint", {"active_play_ms": active_play_ms})],
+        )
+        return {"status": new_status, "state_version": new_version,
+                "active_play_ms": active_play_ms, "public_state": public_state}
+
     def check_puzzle_answer(
         self,
         trial_id: str,
@@ -422,6 +443,8 @@ class LabService:
         trial = self.storage.get_trial(trial_id)
         if not trial:
             raise ValueError(f"Trial {trial_id} not found")
+        if self.storage.get_decision(trial_id) is not None:
+            raise ValueError("Primary decision already submitted")
         if trial.status != "active":
             raise ValueError(f"Trial status must be 'active' to open decision, got '{trial.status}'")
 
@@ -585,6 +608,8 @@ class LabService:
         outcome_summary: dict[str, Any] = {}
 
         if trial.environment_id == "puzzle_hints":
+            new_public_state["primary_decision_committed"] = True
+            new_public_state["post_decision_started_ms"] = trial.active_play_ms
             if selected_action_id == "continue":
                 new_status = "active"
                 outcome_summary = {"action": "continue", "info": "回到自主解謎"}

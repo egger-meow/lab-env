@@ -1,404 +1,246 @@
 import puppeteer from 'puppeteer-core';
-import fs from 'fs';
-import path from 'path';
-
-const CHROME_PATH = 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe';
-const APP_URL = 'http://127.0.0.1:5173';
-
-async function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-async function runBrowserVerification() {
-  console.log('=== Starting Real Browser E2E Verification ===');
-  console.log(`Connecting Chrome executable: ${CHROME_PATH}`);
-
-  const browser = await puppeteer.launch({
-    executablePath: CHROME_PATH,
-    headless: 'new',
-    args: ['--no-sandbox', '--disable-setuid-sandbox', '--window-size=1280,900'],
-  });
-
-  const page = await browser.newPage();
-  await page.setViewport({ width: 1280, height: 900 });
-
-  page.on('console', (msg) => {
-    if (msg.type() === 'error') {
-      console.log(`[Browser Console Error] ${msg.text()}`);
-    }
-  });
-  page.on('requestfailed', (req) => {
-    console.log(`[Browser Request Failed] ${req.url()} (${req.failure()?.errorText})`);
-  });
-  page.on('response', async (res) => {
-    if (res.status() >= 400 && !res.url().includes('favicon')) {
-      try {
-        const text = await res.text();
-        console.log(`[API Error ${res.status()} ${res.url()}]: ${text}`);
-      } catch {}
-    }
-  });
-  page.on('dialog', async (dialog) => {
-    console.log(`[Browser Dialog] Auto-accepting: ${dialog.message()}`);
-    await dialog.accept();
-  });
-
-  try {
-    // 1. Load Application
-    console.log(`\nStep 1: Navigating to ${APP_URL}...`);
-    await page.goto(APP_URL, { waitUntil: 'networkidle0', timeout: 15000 });
-    console.log('Page loaded successfully. Title:', await page.title());
-
-    // 2. Operator Flow: Create Session
-    console.log('\nStep 2: Switching to Operator View...');
-    await page.evaluate(() => {
-      const btns = Array.from(document.querySelectorAll('button'));
-      const target = btns.find((b) => b.textContent.includes('研究者後台'));
-      if (target) target.click();
-    });
-    await sleep(1000);
-
-    const hasOperatorHeader = await page.evaluate(() => {
-      return (
-        document.body.textContent.includes('研究者身分授權') ||
-        document.body.textContent.includes('建立新 Session')
-      );
-    });
-    console.log('Operator dashboard rendered:', hasOperatorHeader);
-    if (!hasOperatorHeader) {
-      throw new Error('Operator dashboard did not render!');
-    }
-
-    console.log('Creating new Session in Operator view...');
-    await page.type('input[placeholder="例如: P_001"]', 'browser-test-p01');
-    await page.evaluate(() => {
-      const btns = Array.from(document.querySelectorAll('button'));
-      const target = btns.find((b) => b.textContent.includes('建立 Session 並初始化試驗'));
-      if (target) target.click();
-    });
-    await sleep(2000);
-
-    const sessionCode = await page.evaluate(() => {
-      const codeEl =
-        document.querySelector('.border-emerald-300') ||
-        document.querySelector('td.font-mono.font-bold');
-      return codeEl ? codeEl.textContent.trim() : null;
-    });
-    console.log(`Session created! Code: ${sessionCode}`);
-    if (!sessionCode || !sessionCode.startsWith('PL-')) {
-      throw new Error(`Failed to create session or invalid code: ${sessionCode}`);
-    }
-
-    // 3. Participant Flow: Switch to Participant & Join Session
-    console.log('\nStep 3: Switching to Participant View and Joining Session...');
-    await page.evaluate(() => {
-      const btns = Array.from(document.querySelectorAll('button'));
-      const target = btns.find((b) => b.textContent.includes('受試者視角'));
-      if (target) target.click();
-    });
-    await sleep(1000);
-
-    await page.waitForSelector('#session-code', { timeout: 5000 });
-    await page.type('#session-code', sessionCode);
-    await page.evaluate(() => {
-      const btns = Array.from(document.querySelectorAll('button'));
-      const target = btns.find((b) => b.textContent.includes('進入試驗'));
-      if (target) target.click();
-    });
-    await sleep(2000);
-
-    // 4. Verify Puzzle View Loaded
-    console.log('\nStep 4: Verifying Puzzle View...');
-    const trialEnv = await page.evaluate(() => {
-      return document.body.textContent.includes('Puzzle Hints') || document.body.textContent.includes('邏輯線索排列');
-    });
-    console.log('Puzzle view active:', trialEnv);
-    if (!trialEnv) {
-      throw new Error('Puzzle Hints trial did not load after join!');
-    }
-
-    await sleep(1200);
-    const initialTimerText = await page.evaluate(() => {
-      const timeEl = document.querySelector('.font-mono.font-bold.text-slate-700');
-      return timeEl ? timeEl.textContent : null;
-    });
-    console.log('Active play timer text:', initialTimerText);
-
-    // 5. Test Pause & Resume
-    console.log('\nStep 5: Testing Pause and Resume Overlay...');
-    await page.evaluate(() => {
-      const btns = Array.from(document.querySelectorAll('button'));
-      const target = btns.find((b) => b.textContent.includes('暫停'));
-      if (target) target.click();
-    });
-    await sleep(1000);
-
-    const isPaused = await page.evaluate(() => {
-      return document.body.textContent.includes('試驗已暫停') && document.body.textContent.includes('繼續試驗');
-    });
-    console.log('Pause overlay active:', isPaused);
-    if (!isPaused) {
-      throw new Error('Pause overlay was not displayed!');
-    }
-
-    await page.evaluate(() => {
-      const btns = Array.from(document.querySelectorAll('button'));
-      const target = btns.find((b) => b.textContent.includes('繼續試驗'));
-      if (target) target.click();
-    });
-    await sleep(1000);
-
-    const isResumed = await page.evaluate(() => {
-      return !document.body.textContent.includes('試驗已暫停');
-    });
-    console.log('Resumed from pause:', isResumed);
-
-    // 6. Test Palette & Check Answer
-    console.log('\nStep 6: Testing Board Item Placement & Check Answer...');
-    const itemClicked = await page.evaluate(() => {
-      // Find item in palette
-      const paletteContainer = document.querySelector('.border-dashed') || document.querySelector('.space-y-4');
-      const allButtons = Array.from(document.querySelectorAll('button'));
-      const paletteBtn = allButtons.find((b) =>
-        b.className.includes('rounded-xl border') &&
-        !b.textContent.includes('檢查') &&
-        !b.textContent.includes('暫停') &&
-        !b.textContent.includes('跳過') &&
-        !b.textContent.includes('協助')
-      );
-      if (paletteBtn) {
-        paletteBtn.click();
-        return paletteBtn.textContent.trim();
-      }
-      return null;
-    });
-    console.log('Palette interaction performed, item:', itemClicked);
-    await sleep(500);
-
-    // Click Check Answer
-    await page.evaluate(() => {
-      const btns = Array.from(document.querySelectorAll('button'));
-      const target = btns.find((b) => b.textContent.includes('檢查答案'));
-      if (target) target.click();
-    });
-    await sleep(1000);
-
-    const feedbackShown = await page.evaluate(() => {
-      return (
-        document.body.textContent.includes('尚未完全符合') ||
-        document.body.textContent.includes('檢查') ||
-        document.body.textContent.includes('嘗試次數')
-      );
-    });
-    console.log('Check answer feedback displayed:', feedbackShown);
-
-    // 7. Test Decision Modal (Open Decision Assistance)
-    console.log('\nStep 7: Testing Decision Modal (Assistance Options)...');
-    await page.evaluate(() => {
-      const btns = Array.from(document.querySelectorAll('button'));
-      const target = btns.find((b) => b.textContent.includes('我想看看協助選項'));
-      if (target) target.click();
-    });
-    await sleep(1000);
-
-    const isModalOpen = await page.evaluate(() => {
-      return (
-        document.body.textContent.includes('偏好決策：選擇本次協助方案') &&
-        (document.body.textContent.includes('給我一點方向') || document.body.textContent.includes('方向')) &&
-        (document.body.textContent.includes('告訴我下一步') || document.body.textContent.includes('下一步'))
-      );
-    });
-    console.log('Decision modal opened with 4 actions:', isModalOpen);
-    if (!isModalOpen) {
-      throw new Error('Decision modal did not open!');
-    }
-
-    // Try submitting without evaluating -> Should fail validation
-    await page.evaluate(() => {
-      const btns = Array.from(document.querySelectorAll('button'));
-      const target = btns.find((b) => b.textContent.includes('確認並執行此方案'));
-      if (target) target.click();
-    });
-    await sleep(500);
-
-    const hasValidationErr = await page.evaluate(() => {
-      return document.body.textContent.includes('請對所有方案標記可接受性');
-    });
-    console.log('Validation prevented incomplete submission:', hasValidationErr);
-
-    // Evaluate all 4 actions as "可接受"
-    await page.evaluate(() => {
-      const yesBtns = Array.from(document.querySelectorAll('button')).filter((b) => b.textContent.trim() === '可接受');
-      yesBtns.forEach((b) => b.click());
-    });
-    await sleep(500);
-
-    // Select the "hint" (給我一點方向) action
-    await page.evaluate(() => {
-      const cards = Array.from(document.querySelectorAll('div')).filter(
-        (d) => (d.textContent.includes('給我一點方向') || d.textContent.includes('方向')) && d.querySelector('input[type="radio"]')
-      );
-      if (cards.length > 0) {
-        const radio = cards[0].querySelector('input[type="radio"]');
-        if (radio) radio.click();
-      }
-    });
-    await sleep(500);
-
-    // Submit decision
-    console.log('Submitting assistance choice...');
-    await page.evaluate(() => {
-      const btns = Array.from(document.querySelectorAll('button'));
-      const target = btns.find((b) => b.textContent.includes('確認並執行此方案'));
-      if (target) target.click();
-    });
-    await sleep(1500);
-
-    const hintOutcomeShown = await page.evaluate(() => {
-      return (
-        document.body.textContent.includes('系統提供之方向提示') ||
-        document.body.textContent.includes('提示')
-      );
-    });
-    console.log('Hint outcome successfully applied on board:', hintOutcomeShown);
-
-    // 8. Skip Trial to test Post-Trial Feedback & Followup Solution
-    console.log('\nStep 8: Testing Skip Trial & Post-Trial Feedback...');
-    await page.evaluate(() => {
-      const btns = Array.from(document.querySelectorAll('button'));
-      const target = btns.find((b) => b.textContent.includes('跳過此題'));
-      if (target) target.click();
-    });
-    await sleep(2000);
-
-    const feedbackCardVisible = await page.evaluate(() => {
-      return (
-        document.body.textContent.includes('本題已跳過') ||
-        document.body.textContent.includes('您覺得這次獲得的協助如何？')
-      );
-    });
-    console.log('Post-trial feedback card visible:', feedbackCardVisible);
-    if (!feedbackCardVisible) {
-      throw new Error('Feedback card was not displayed after trial completion/skip!');
-    }
-
-    // Select "剛好" rating and submit
-    await page.evaluate(() => {
-      const ratingBtns = Array.from(document.querySelectorAll('button')).filter(
-        (b) => b.textContent.trim() === '剛好'
-      );
-      if (ratingBtns.length > 0) ratingBtns[0].click();
-    });
-    await sleep(500);
-
-    await page.evaluate(() => {
-      const btns = Array.from(document.querySelectorAll('button'));
-      const target = btns.find((b) => b.textContent.includes('送出回饋') || b.textContent.includes('回饋'));
-      if (target) target.click();
-    });
-    await sleep(1000);
-
-    // Click reveal solution
-    console.log('Revealing followup solution...');
-    await page.evaluate(() => {
-      const btns = Array.from(document.querySelectorAll('button'));
-      const target = btns.find((b) => b.textContent.includes('看解法'));
-      if (target) target.click();
-    });
-    await sleep(1000);
-
-    const solRevealed = await page.evaluate(() => {
-      return (
-        document.body.textContent.includes('正解') ||
-        document.body.textContent.includes('格')
-      );
-    });
-    console.log('Followup solution successfully revealed:', solRevealed);
-
-    // Advance to next trial (BRET tutorial)
-    console.log('\nStep 9: Advancing to Next Trial (BRET Tutorial)...');
-    await page.evaluate(() => {
-      const btns = Array.from(document.querySelectorAll('button'));
-      const target = btns.find((b) => b.textContent.includes('前進下一題') || b.textContent.includes('前進下一回合'));
-      if (target) target.click();
-    });
-    await sleep(2000);
-
-    // 9. Verify Next Trial Loaded (Trial 2: pz_pilot_02)
-    const nextTrialLoaded = await page.evaluate(() => {
-      return (
-        document.body.textContent.includes('第 2 題') ||
-        document.body.textContent.includes('pz_pilot_02') ||
-        document.body.textContent.includes('Puzzle Hints')
-      );
-    });
-    console.log('Next trial (Trial 2) successfully loaded:', nextTrialLoaded);
-    if (!nextTrialLoaded) {
-      throw new Error('Trial 2 did not load after clicking Next!');
-    }
-
-    // 10. Refresh & State Restoration Verification
-    console.log('\nStep 10: Testing Browser Page Refresh Restoration...');
-    await page.reload({ waitUntil: 'networkidle0' });
-    await sleep(2000);
-
-    const restoredSession = await page.evaluate(() => {
-      return (
-        document.body.textContent.includes('第 2 題') ||
-        document.body.textContent.includes('pz_pilot_02') ||
-        document.body.textContent.includes('Puzzle Hints')
-      );
-    });
-    console.log('State properly restored after browser reload:', restoredSession);
-    if (!restoredSession) {
-      throw new Error('Trial state was not restored after refresh!');
-    }
-
-    // 11. Operator Verification: Event Stream & Details
-    console.log('\nStep 11: Operator Inspection & Monotonic Event Stream...');
-    await page.evaluate(() => {
-      const btns = Array.from(document.querySelectorAll('button'));
-      const target = btns.find((b) => b.textContent.includes('研究者後台'));
-      if (target) target.click();
-    });
-    await sleep(1000);
-
-    await page.evaluate(() => {
-      const btns = Array.from(document.querySelectorAll('button'));
-      const target = btns.find((b) => b.textContent.includes('檢視'));
-      if (target) target.click();
-    });
-    await sleep(1500);
-
-    const eventStreamInfo = await page.evaluate(() => {
-      const evHeader = Array.from(document.querySelectorAll('h4')).find((h) =>
-        h.textContent.includes('有序事件日誌')
-      );
-      const evItems = Array.from(document.querySelectorAll('.leading-relaxed'));
-      return {
-        header: evHeader ? evHeader.textContent.trim() : null,
-        count: evItems.length,
-      };
-    });
-    console.log('Event Stream Log verified:', eventStreamInfo);
-
-    // Take verification screenshot
-    const docsDir = path.resolve('..', 'docs');
-    if (!fs.existsSync(docsDir)) fs.mkdirSync(docsDir, { recursive: true });
-    const screenshotPath = path.resolve(docsDir, 'browser_e2e_verification.png');
-    await page.screenshot({ path: screenshotPath, fullPage: true });
-    console.log(`Saved screenshot evidence to: ${screenshotPath}`);
-
-    console.log('\n=== ALL BROWSER E2E VERIFICATIONS PASSED SUCCESSFULLY ===');
-  } catch (err) {
-    console.error('\n❌ Browser verification failed:', err);
-    throw err;
-  } finally {
-    await browser.close();
-  }
-}
-
-runBrowserVerification().catch((err) => {
-  console.error(err);
-  process.exit(1);
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
+import { spawn } from 'node:child_process';
+const APP = process.env.APP_URL || 'http://127.0.0.1:18731', API = process.env.API_URL || 'http://127.0.0.1:18732';
+const out = path.resolve('../runs/part-c/browser');
+fs.mkdirSync(out, { recursive: true });
+const checks = [], errors = [], payloads = [];
+const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+// Keep local servers and Chrome in the same host execution context.
+const backend = spawn(path.resolve('../backend/.venv/Scripts/python.exe'), ['-m', 'uvicorn', 'preference_lab.api.app:app', '--host', '127.0.0.1', '--port', new URL(API).port], {
+    cwd: path.resolve('../backend'), windowsHide: true,
+    env: { ...process.env, PREFERENCE_LAB_DB: path.join(out, `synthetic-${Date.now()}.sqlite3`) }, stdio: ['ignore', 'ignore', 'pipe'],
 });
+const frontend = spawn(process.execPath, ['node_modules/vite/bin/vite.js', '--host', '127.0.0.1', '--port', new URL(APP).port, '--strictPort'], {
+    cwd: process.cwd(), windowsHide: true, env: { ...process.env, PREFERENCE_LAB_API_URL: API }, stdio: ['ignore', 'ignore', 'pipe'],
+});
+backend.stderr.on('data', data => { if (String(data).includes('ERROR'))
+    console.error(String(data)); });
+frontend.stderr.on('data', data => console.error(String(data)));
+process.on('exit', () => { backend.kill(); frontend.kill(); });
+for (let attempt = 0; attempt < 40; attempt++) {
+    if (backend.exitCode !== null || frontend.exitCode !== null)
+        throw new Error('Isolated test server exited; refusing to use an existing service');
+    try {
+        const responses = await Promise.all([fetch(API + '/api/health'), fetch(APP)]);
+        if (responses.every(r => r.ok))
+            break;
+    }
+    catch { /* wait for startup */ }
+    await sleep(250);
+}
+const browser = await puppeteer.launch({ executablePath: process.env.CHROME_PATH || 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe', headless: true, userDataDir: path.join(out, `profile-${Date.now()}`), args: ['--no-sandbox', '--window-size=1280,720'] });
+const page = await browser.newPage();
+await page.setViewport({ width: 1280, height: 720 });
+page.on('pageerror', err => errors.push(err.message));
+page.on('dialog', dialog => dialog.accept());
+page.on('request', req => { if (req.url().endsWith('/decision') && req.method() === 'POST')
+    payloads.push(req.postData()); });
+const check = (value, text) => { assert.ok(value, text); checks.push(text); console.log('PASS', text); };
+const shot = name => page.screenshot({ path: path.join(out, `${name}.png`) });
+async function click(text) {
+    await page.locator(`xpath///button[contains(., ${JSON.stringify(text)}) and not(@disabled)]`).click();
+}
+async function api(url, body, token) {
+    const r = await fetch(API + url, { method: body ? 'POST' : 'GET', headers: { 'Content-Type': 'application/json', ...(token ? { 'X-Session-Token': token } : { 'X-Operator-Token': 'dev-operator-token-local' }) }, body: body ? JSON.stringify(body) : undefined });
+    assert.ok(r.ok, `${url}: ${r.status} ${!r.ok ? await r.text() : ''}`);
+    return r.json();
+}
+let token, code, id;
+const current = () => api(`/api/trials/${id}`, null, token);
+async function status(expected, timeout = 15000) { const end = Date.now() + timeout; while (Date.now() < end) {
+    const t = await current();
+    if (t.status === expected)
+        return t;
+    await sleep(150);
+} throw new Error(`Expected ${expected}, got ${(await current()).status}`); }
+async function blank(t, name) {
+    assert.deepEqual(await page.$$eval(`input[name="${name}"]`, els => els.map(i => i.value)), t.display_order);
+    check(true, `${t.item_id}: display_order`);
+    check(await page.$$eval(`input[name="${name}"]:checked`, els => !els.length), `${t.item_id}: blank choice`);
+    check(await page.$$eval('button[aria-pressed="true"]', els => !els.length), `${t.item_id}: blank acceptability`);
+    check(await page.$$eval('textarea, #reason', els => els.every(i => i.value === '')), `${t.item_id}: blank reason`);
+}
+async function fill(name, action) { const ratings = await page.$$('button[aria-pressed]'); for (let i = 0; i < ratings.length; i += 3)
+    await ratings[i].click(); await page.click(`input[name="${name}"][value="${action}"]`); }
+async function next(text) { await click(text); await sleep(350); id = (await api('/api/sessions/join', { session_code: code })).current_trial_id; }
+try {
+    await page.goto(APP + '?view=operator', { waitUntil: 'networkidle0' });
+    check(await page.$('input[placeholder="例如: P_001"]'), '?view=operator entry');
+    await shot('operator');
+    const created = await api('/api/operator/sessions', { participant_id: 'llm_synthetic_part_c_e2e' });
+    code = created.session.session_code;
+    const joined = await api('/api/sessions/join', { session_code: code });
+    token = joined.session_token;
+    id = joined.current_trial_id;
+    await page.goto(APP);
+    await page.waitForSelector('#session-code');
+    await page.type('#session-code', code);
+    await click('進入試驗');
+    await page.waitForFunction(() => document.body.textContent.includes('邏輯位置排列謎題'));
+    check((await current()).active_play_ms < 1000, 'First puzzle timer starts at zero');
+    check(await page.evaluate(() => document.body.textContent.includes('月亮')), 'Chinese labels and clues');
+    await shot('participant-puzzle');
+    await sleep(5600);
+    check((await current()).active_play_ms >= 5000, 'Timer heartbeat without board actions');
+    const beforeReloadSeconds = await page.evaluate(() => Math.max(...[...document.querySelectorAll('span')].map(el => /^\d+ 秒$/.test(el.textContent) ? parseInt(el.textContent) : 0)));
+    await page.reload({ waitUntil: 'networkidle0' });
+    check(await page.evaluate(before => [...document.querySelectorAll('span')].some(el => /^\d+ 秒$/.test(el.textContent) && parseInt(el.textContent) >= before), beforeReloadSeconds), 'Active reload preserves visible unsaved time');
+    const away = await browser.newPage();
+    await away.bringToFront();
+    await status('paused');
+    await page.bringToFront();
+    await away.close();
+    await page.waitForFunction(() => document.body.textContent.includes('試驗已暫停'));
+    const pausedMs = (await current()).active_play_ms;
+    await shot('paused');
+    await sleep(700);
+    check((await current()).active_play_ms === pausedMs, 'Blur calls pause and freezes time');
+    await page.reload({ waitUntil: 'networkidle0' });
+    check((await current()).status === 'paused', 'Reload preserves pause');
+    await click('繼續');
+    console.log('Waiting for real 45-second primary threshold');
+    await status('decision_open', 50000);
+    await page.waitForSelector('[role="dialog"]');
+    let t = await current();
+    check(t.active_play_ms >= 45000 && t.active_play_ms < 47000, '45 seconds automatically opens primary decision');
+    await blank(t, 'selected_action');
+    await shot('decision-modal');
+    await fill('selected_action', 'continue');
+    await page.type('#reason', 'synthetic retry evidence');
+    await page.reload({ waitUntil: 'networkidle0' });
+    await page.waitForSelector('#reason');
+    check(await page.$eval('#reason', i => i.value === 'synthetic retry evidence'), 'Puzzle draft survives reload');
+    check(await page.$eval('input[value="continue"]', i => i.checked), 'Puzzle choice survives reload');
+    assert.deepEqual(await page.$$eval('input[name=selected_action]', els => els.map(el => el.value)), t.display_order);
+    check(true, 'Puzzle order survives reload');
+    await page.focus('[role="dialog"] button');
+    await page.keyboard.down('Shift');
+    await page.keyboard.press('Tab');
+    await page.keyboard.up('Shift');
+    check(await page.evaluate(() => !!document.activeElement.closest('[role="dialog"]')), 'Reverse Tab stays inside modal');
+    await page.keyboard.press('Tab');
+    check(await page.evaluate(() => document.activeElement.textContent.includes('跳過')), 'Forward Tab wraps to exit');
+    const cdp = await page.createCDPSession();
+    let dropped = false;
+    await cdp.send('Fetch.enable', { patterns: [{ urlPattern: '*/decision', requestStage: 'Response' }] });
+    cdp.on('Fetch.requestPaused', async (e) => { if (!dropped && e.responseStatusCode === 200) {
+        dropped = true;
+        await cdp.send('Fetch.failRequest', { requestId: e.requestId, errorReason: 'ConnectionReset' });
+    }
+    else
+        await cdp.send('Fetch.continueRequest', { requestId: e.requestId }); });
+    await click('確認並執行');
+    await status('active');
+    await page.waitForFunction(() => document.body.textContent.includes('Failed to fetch'));
+    check(dropped, 'Lost response after backend acceptance');
+    await sleep(1000);
+    await page.reload({ waitUntil: 'networkidle0' });
+    await cdp.send('Fetch.disable');
+    check(payloads.length === 2, `Refresh replays pending decision once (${payloads.length} requests)`);
+    assert.equal(payloads[0], payloads[1]);
+    check(true, 'Retry body byte-for-byte identical including key and deliberation_ms');
+    check(!('preferred_action_ids' in JSON.parse(payloads[0])), 'Unasked preference field omitted');
+    console.log('Waiting for real 45-second followup threshold');
+    await status('completed', 50000);
+    t = await current();
+    check(t.public_state.followup_timeout, 'Post-decision timeout enters followup');
+    check(t.active_play_ms === t.public_state.post_decision_started_ms + 45000, 'Reload preserves followup deadline');
+    const detail = await api(`/api/operator/sessions/${created.session.session_id}`);
+    check(detail.events.filter(e => e.trial_id === id && e.event_type === 'decision_opened').length === 1, 'Only one primary decision opened');
+    check(detail.events.filter(e => e.trial_id === id && e.event_type === 'decision_committed').length === 1, 'Retry creates one decision');
+    await next('前進下一題');
+    for (let index = 1; index < 6; index++) {
+        t = await current();
+        check(t.active_play_ms < 1500, `${t.item_id}: timer reset`);
+        check(await page.evaluate(() => [...document.querySelectorAll('span')].some(el => /^[01] 秒$/.test(el.textContent))), `${t.item_id}: visible timer reset`);
+        await click('我想看看協助選項');
+        await page.waitForSelector('[role="dialog"]');
+        t = await current();
+        await blank(t, 'selected_action');
+        if (index === 1) {
+            await page.focus('[role="dialog"] button');
+            await page.keyboard.press('Enter');
+            await status('skipped');
+            check(true, 'Keyboard skip from modal without invented answer');
+        }
+        else {
+            await fill('selected_action', index === 2 ? 'hint' : 'solution');
+            await click('確認並執行');
+            if (index === 2) {
+                await status('active');
+                await page.waitForFunction(() => document.body.textContent.includes('方向引導提示'));
+                check(true, 'Authoritative revealed_hint shown');
+                await click('跳過此題');
+                await status('skipped');
+            }
+            else
+                await status('completed');
+        }
+        await next('前進下一題');
+    }
+    t = await current();
+    check(t.public_state.tutorial_type === 'demonstration', 'BRET demonstration tutorial');
+    await shot('bret-tutorial');
+    while ((await current()).status !== 'completed') {
+        await click('執行此展示步驟');
+        await sleep(250);
+    }
+    await next('進入下一題');
+    t = await current();
+    check(t.public_state.tutorial_type === 'comprehension', 'BRET comprehension tutorial');
+    const fixture = JSON.parse(fs.readFileSync('../instruments/bret_discrete/v001/tutorial_02.json', 'utf8'));
+    for (const q of fixture.private_data.comprehension_check.questions)
+        await page.click(`input[name="${q.question_id}"][value="${q.correct_answer}"]`);
+    await click('送出理解回答');
+    await status('completed');
+    await shot('bret-comprehension');
+    await next('前進先導題目');
+    for (let index = 0; index < 4; index++) {
+        await status('decision_open');
+        await page.waitForSelector('input[name="selected_bret_action"]');
+        t = await current();
+        await blank(t, 'selected_bret_action');
+        await fill('selected_bret_action', t.display_order[index]);
+        if (index === 0) {
+            await page.type('textarea', 'synthetic BRET draft');
+            await page.reload({ waitUntil: 'networkidle0' });
+            check(await page.$eval('textarea', i => i.value === 'synthetic BRET draft'), 'BRET draft survives reload');
+            assert.deepEqual(await page.$$eval('input[name=selected_bret_action]', els => els.map(el => el.value)), t.display_order);
+            check(true, 'BRET order survives reload');
+            await page.$eval('input[name=selected_bret_action]', el => el.closest('form').scrollIntoView({ block: 'start' }));
+            await shot('bret-pilot');
+        }
+        await click('確認並執行');
+        await status('completed');
+        await page.waitForFunction(() => document.body.textContent.includes('本輪結算'));
+        if (index === 0) {
+            await page.evaluate(() => [...document.querySelectorAll('h3')].find(el => /命中炸彈/.test(el.textContent))?.scrollIntoView({ block: 'center' }));
+            await shot('bret-result');
+        }
+        if (index < 3)
+            await next('前進下一回合');
+        else
+            await click('完成全部試驗');
+    }
+    await page.waitForFunction(() => document.body.textContent.includes('您已完成本次試驗'));
+    check((await api('/api/sessions/join', { session_code: code })).session_completed, 'All 12 trials complete');
+    check(!errors.length, `No browser runtime errors: ${errors.join(', ')}`);
+    await page.goto(APP + '?view=operator', { waitUntil: 'networkidle0' });
+    await shot('operator');
+    fs.writeFileSync(path.join(out, 'report.json'), JSON.stringify({ viewport: '1280x720', synthetic: true, checks, errors }, null, 2));
+    console.log(`Completed ${checks.length} assertions: ${out}`);
+}
+catch (err) {
+    console.error(err);
+    await shot('failure').catch(() => { });
+    fs.writeFileSync(path.join(out, 'failure.txt'), err.stack);
+    throw err;
+}
+finally {
+    await browser.close();
+    backend.kill();
+    frontend.kill();
+}

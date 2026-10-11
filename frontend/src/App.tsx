@@ -1,17 +1,18 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Navbar } from './components/Navbar';
 import { SessionJoin } from './components/SessionJoin';
 import { PauseOverlay } from './components/PauseOverlay';
 import { PuzzleView } from './components/PuzzleView';
 import { BretView } from './components/BretView';
 import { OperatorView } from './components/OperatorView';
-import { api, ApiError } from './api/client';
+import { api, ApiError, pendingKey } from './api/client';
 import type { ParticipantTrialView, SessionInfo } from './types';
 import { CheckCircle2, RotateCcw } from 'lucide-react';
 
 export const App: React.FC = () => {
   const [viewMode, setViewMode] = useState<'participant' | 'operator'>(
-    (localStorage.getItem('preference_lab_view_mode') as any) || 'participant'
+    new URLSearchParams(location.search).get('view') === 'operator' ? 'operator' :
+    (localStorage.getItem('preference_lab_view_mode') as 'participant' | 'operator') || 'participant'
   );
 
   // Participant state
@@ -34,8 +35,11 @@ export const App: React.FC = () => {
     localStorage.setItem('preference_lab_view_mode', mode);
   };
 
+  const restoreStartedRef = useRef(false);
   // Restore session on initial load (handles page refresh & recovery)
   useEffect(() => {
+    if (restoreStartedRef.current) return;
+    restoreStartedRef.current = true;
     const savedCode = localStorage.getItem('preference_lab_session_code');
     if (savedCode && viewMode === 'participant') {
       handleJoinSession(savedCode, false);
@@ -59,6 +63,11 @@ export const App: React.FC = () => {
       if (res.session_completed) {
         setCurrentTrial(null);
       } else if (res.current_trial_id) {
+        const pending = localStorage.getItem(pendingKey(res.current_trial_id));
+        if (pending) {
+          try { await api.commitDecision(res.current_trial_id, JSON.parse(pending), res.session_token); }
+          catch { showSyncToast('仍有待確認決策，請重試原提交；已保留請求與草稿'); }
+        }
         const trialData = await api.getTrial(res.current_trial_id, res.session_token);
         setCurrentTrial(trialData);
       }
@@ -66,8 +75,8 @@ export const App: React.FC = () => {
       if (clearOnError) {
         setJoinError(err.message || '加入試驗失敗，請檢查代碼是否正確');
       } else {
-        // Stale cached code in localStorage: clear it
-        handleLeaveSession();
+        if (err instanceof ApiError && err.status === 404) handleLeaveSession();
+        else setJoinError('暫時無法恢復連線；代碼、草稿與待確認請求已保留，請重試。');
       }
     } finally {
       setLoading(false);
@@ -117,18 +126,13 @@ export const App: React.FC = () => {
   const handlePause = async (activePlayMs: number) => {
     if (!currentTrial) return;
     try {
-      const res = await api.pauseTrial(
+      await api.pauseTrial(
         currentTrial.trial_id,
         activePlayMs,
         currentTrial.state_version,
         sessionToken
       );
-      setCurrentTrial({
-        ...currentTrial,
-        status: 'paused',
-        state_version: res.state_version,
-        active_play_ms: activePlayMs,
-      });
+      setCurrentTrial(await api.getTrial(currentTrial.trial_id, sessionToken));
     } catch (err: any) {
       if (err instanceof ApiError && err.isStateVersionConflict) {
         showSyncToast('狀態已同步，請重試');
@@ -200,11 +204,12 @@ export const App: React.FC = () => {
         </div>
       )}
 
-      <main className="grow py-6 px-4 sm:px-6 lg:px-8 max-w-5xl mx-auto w-full">
+      <main className="grow py-4 px-4 sm:px-6 lg:px-8 max-w-5xl mx-auto w-full">
         {viewMode === 'operator' ? (
           <OperatorView />
         ) : !sessionCode || !sessionInfo ? (
           <SessionJoin
+            defaultSessionCode={sessionCode}
             onJoin={handleJoinSession}
             loading={loading}
             error={joinError}
@@ -242,7 +247,7 @@ export const App: React.FC = () => {
         ) : currentTrial ? (
           <>
             {/* Trial Progress Bar */}
-            <div className="mb-6 bg-white rounded-xl border border-slate-200 px-4 py-3 flex items-center justify-between text-xs text-slate-500 shadow-2xs">
+            <div className="mb-4 bg-white rounded-xl border border-slate-200 px-4 py-3 flex items-center justify-between text-xs text-slate-500 shadow-2xs">
               <div className="flex items-center space-x-2 font-medium">
                 <span className="text-slate-800 font-bold">
                   第 {currentTrial.collection_index + 1} 題 / 共 {totalTrials} 題
@@ -265,6 +270,7 @@ export const App: React.FC = () => {
             {/* Trial Views by Environment */}
             {currentTrial.environment_id === 'puzzle_hints' ? (
               <PuzzleView
+                key={currentTrial.trial_id}
                 trial={currentTrial}
                 sessionToken={sessionToken}
                 onTrialUpdated={setCurrentTrial}
@@ -275,6 +281,8 @@ export const App: React.FC = () => {
               />
             ) : (
               <BretView
+                onPause={handlePause}
+                key={currentTrial.trial_id}
                 trial={currentTrial}
                 sessionToken={sessionToken}
                 onTrialUpdated={setCurrentTrial}

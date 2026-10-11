@@ -275,6 +275,18 @@ def check_answer(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
 
+@app.post("/api/trials/{trial_id}/checkpoint")
+def checkpoint_play(
+    trial_id: str, payload: OpenDecisionRequest,
+    _auth_trial: Trial = Depends(verify_participant_trial),
+    service: LabService = Depends(get_service),
+) -> dict[str, Any]:
+    try:
+        return service.checkpoint_play(trial_id, payload.active_play_ms, payload.state_version)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
 @app.post("/api/trials/{trial_id}/open-decision")
 def open_decision(
     trial_id: str,

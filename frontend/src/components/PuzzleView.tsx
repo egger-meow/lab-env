@@ -33,6 +33,10 @@ export const PuzzleView: React.FC<PuzzleViewProps> = ({
   hasNext,
 }) => {
   const stimulus = trial.public_stimulus;
+  const orderedSpecs = [...trial.action_specs].sort((a, b) => trial.display_order.indexOf(a.action_id) - trial.display_order.indexOf(b.action_id));
+  const itemIcons: Record<string, string> = { moon: '☾', key: '⚿', gem: '◆', crown: '♛', sword: '⚔', shield: '⛨', star: '★', sun: '☀', heart: '♥', tree: '♠', circle: '●', square: '■', triangle: '▲' };
+  const itemLabel = (id: string) => `${itemIcons[id] || '◇'} ${stimulus.item_labels?.[id] || id}`;
+  const timeKey = `preference_lab_time_${trial.trial_id}`;
   const numPositions = stimulus?.num_positions || 4;
   const items: string[] = stimulus?.items || [];
   const clues: any[] = stimulus?.clues || [];
@@ -41,7 +45,7 @@ export const PuzzleView: React.FC<PuzzleViewProps> = ({
     trial.public_state.board || Array(numPositions).fill(null)
   );
   const [selectedInventoryItem, setSelectedInventoryItem] = useState<string | null>(null);
-  const [activePlayMs, setActivePlayMs] = useState<number>(trial.active_play_ms || 0);
+  const [activePlayMs, setActivePlayMs] = useState<number>(Math.max(trial.active_play_ms || 0, Number(localStorage.getItem(timeKey) || 0)));
   const [statusMessage, setStatusMessage] = useState<string | null>(
     trial.public_state.status_message || null
   );
@@ -53,7 +57,6 @@ export const PuzzleView: React.FC<PuzzleViewProps> = ({
     trial.public_state.solution_revealed_followup || null
   );
 
-  const timerRef = useRef<number | null>(null);
   const isRunningRef = useRef<boolean>(true);
   const playMsRef = useRef<number>(trial.active_play_ms || 0);
   playMsRef.current = activePlayMs;
@@ -67,58 +70,68 @@ export const PuzzleView: React.FC<PuzzleViewProps> = ({
   // Synchronize with external trial changes
   useEffect(() => {
     setBoard(trial.public_state.board || Array(numPositions).fill(null));
-    setActivePlayMs((prev) => Math.max(prev, trial.active_play_ms || 0));
+    setActivePlayMs((prev) => trial.status === 'active' ? Math.max(prev, trial.active_play_ms || 0) : trial.active_play_ms);
+    if (trial.status !== 'active') localStorage.setItem(timeKey, String(trial.active_play_ms));
     setStatusMessage(trial.public_state.status_message || null);
     setIsSolved(trial.public_state.is_solved || false);
     setAttempts(trial.public_state.attempts || 0);
     setFollowupSolution(trial.public_state.solution_revealed_followup || null);
   }, [trial]);
 
-  // Active play time counter: only runs when trial is 'active' and window is focused
+  const trialRef = useRef(trial);
+  trialRef.current = trial;
+  const busyRef = useRef(false);
+  const pauseRef = useRef(onPause);
+  pauseRef.current = onPause;
   useEffect(() => {
-    if (trial.status !== 'active') {
+    isRunningRef.current = trial.status === 'active' && !document.hidden;
+    const pause = () => {
       isRunningRef.current = false;
-      if (timerRef.current) clearInterval(timerRef.current);
-      return;
-    }
-
-    isRunningRef.current = !document.hidden;
-
-    const handleVisibility = () => {
-      isRunningRef.current = !document.hidden;
-    };
-    const handleBlur = () => {
-      isRunningRef.current = false;
-    };
-    const handleFocus = () => {
-      isRunningRef.current = true;
-    };
-
-    window.addEventListener('visibilitychange', handleVisibility);
-    window.addEventListener('blur', handleBlur);
-    window.addEventListener('focus', handleFocus);
-
-    const interval = window.setInterval(() => {
-      if (isRunningRef.current) {
-        setActivePlayMs((prev) => {
-          const nextVal = prev + 200;
-          // Trigger decision modal recommendation at 45s if not solved
-          if (prev < 45000 && nextVal >= 45000 && trial.status === 'active') {
-            // Optional auto-open trigger
-          }
-          return nextVal;
-        });
+      const current = trialRef.current;
+      if (current.status === 'active' || current.status === 'decision_open') {
+        void pauseRef.current(current.status === 'active' ? playMsRef.current : current.active_play_ms);
       }
+    };
+    const visibility = () => { if (document.hidden) pause(); };
+    window.addEventListener('blur', pause);
+    document.addEventListener('visibilitychange', visibility);
+    const interval = window.setInterval(() => {
+      if (!isRunningRef.current) return;
+      const next = playMsRef.current + 200;
+      playMsRef.current = next;
+      localStorage.setItem(timeKey, String(next));
+      setActivePlayMs(next);
     }, 200);
-    timerRef.current = interval;
-
     return () => {
       clearInterval(interval);
-      window.removeEventListener('visibilitychange', handleVisibility);
-      window.removeEventListener('blur', handleBlur);
-      window.removeEventListener('focus', handleFocus);
+      window.removeEventListener('blur', pause);
+      document.removeEventListener('visibilitychange', visibility);
     };
-  }, [trial.status]);
+  }, [trial.status, timeKey]);
+
+  // Persist time independently of board operations; the trial-scoped local checkpoint
+  // also covers refresh between heartbeats. Decision time remains frozen.
+  useEffect(() => {
+    if (trial.status !== 'active' || busyRef.current || loadingAction) return;
+    const start = trial.public_state.post_decision_started_ms;
+    const primaryDue = !trial.public_state.primary_decision_committed && activePlayMs >= 45000;
+    const followupDue = start !== undefined && activePlayMs >= start + 45000;
+    if (primaryDue) {
+      busyRef.current = true;
+      void handleOpenDecision().finally(() => { busyRef.current = false; });
+    } else if (followupDue || activePlayMs - trial.active_play_ms >= 5000) {
+      busyRef.current = true;
+      void api.checkpoint(trial.trial_id, activePlayMs, sessionToken)
+        .then(res => {
+          if (res.status !== 'active') {
+            localStorage.setItem(timeKey, String(res.active_play_ms));
+            setActivePlayMs(res.active_play_ms);
+          }
+          onTrialUpdated({ ...trialRef.current, ...res });
+        }).catch(err => setActionError(err.message))
+        .finally(() => { busyRef.current = false; });
+    }
+  }, [activePlayMs, trial.status, trial.state_version, loadingAction]);
 
   // Save board changes to backend
   const handleBoardSlotClick = async (idx: number) => {
@@ -230,7 +243,7 @@ export const PuzzleView: React.FC<PuzzleViewProps> = ({
   };
 
   const handleOpenDecision = async () => {
-    if (trial.status !== 'active') return;
+    if (trial.status !== 'active' || trial.public_state.primary_decision_committed) return;
     setLoadingAction('open_decision');
     setActionError(null);
     const currentMs = Math.max(activePlayMs, trial.active_play_ms || 0);
@@ -307,7 +320,7 @@ export const PuzzleView: React.FC<PuzzleViewProps> = ({
   const isOver45s = seconds >= 45;
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-4">
       {/* Top Header Controls */}
       <div className="bg-white rounded-2xl border border-slate-200 p-4 md:p-5 flex flex-wrap items-center justify-between gap-4 shadow-xs">
         <div className="flex items-center space-x-3">
@@ -376,20 +389,20 @@ export const PuzzleView: React.FC<PuzzleViewProps> = ({
       )}
 
       {/* Revealed Hint Callout */}
-      {trial.public_state.hint_revealed && (
+      {trial.public_state.revealed_hint && (
         <div className="p-4 rounded-xl bg-amber-50 border border-amber-200 text-amber-900 text-xs flex items-start space-x-3 shadow-xs">
           <Lightbulb className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
           <div>
             <h4 className="font-bold text-amber-950 mb-0.5">方向引導提示：</h4>
             <p className="text-slate-700 leading-relaxed">
-              {trial.public_state.hint_revealed}
+              {trial.public_state.revealed_hint}
             </p>
           </div>
         </div>
       )}
 
       {/* Clues Card */}
-      <div className="bg-white rounded-2xl border border-slate-200 p-5 md:p-6 shadow-xs">
+      <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-xs">
         <h3 className="text-xs font-bold text-slate-700 uppercase tracking-wider mb-3 flex items-center gap-1.5">
           <span className="w-1.5 h-1.5 rounded-full bg-sky-500"></span>
           本題已知線索 (Clues)
@@ -403,14 +416,14 @@ export const PuzzleView: React.FC<PuzzleViewProps> = ({
               <span className="w-5 h-5 rounded-full bg-white text-slate-500 flex items-center justify-center shrink-0 border border-slate-200 text-[10px] font-bold">
                 {idx + 1}
               </span>
-              <span>{c.source_text}</span>
+              <span>{c.text_zh || c.source_text}</span>
             </div>
           ))}
         </div>
       </div>
 
       {/* Board & Inventory Section */}
-      <div className="bg-white rounded-2xl border border-slate-200 p-6 md:p-8 shadow-xs space-y-6">
+      <div className="bg-white rounded-2xl border border-slate-200 p-4 md:p-5 shadow-xs space-y-4">
         <div>
           <div className="flex items-center justify-between mb-3">
             <h3 className="text-xs font-bold text-slate-700 uppercase tracking-wider flex items-center gap-1.5">
@@ -442,13 +455,13 @@ export const PuzzleView: React.FC<PuzzleViewProps> = ({
                 <button
                   key={idx}
                   type="button"
-                  disabled={isTerminal}
+                  disabled={trial.status !== 'active' || loadingAction !== null || busyRef.current}
                   onClick={() => handleBoardSlotClick(idx)}
-                  className={`h-24 md:h-28 rounded-2xl border-2 transition-all flex flex-col items-center justify-center p-2 relative group ${
+                  className={`h-20 rounded-2xl border-2 transition-all flex flex-col items-center justify-center p-2 relative group ${
                     isSlotFilled
                       ? 'border-sky-500 bg-sky-50/50 shadow-sm'
                       : selectedInventoryItem
-                      ? 'border-dashed border-sky-400 bg-sky-50/20 hover:bg-sky-50/50 animate-pulse'
+                      ? 'border-dashed border-sky-400 bg-sky-50/20 hover:bg-sky-50/50'
                       : 'border-dashed border-slate-300 bg-slate-50/50 hover:border-slate-400'
                   }`}
                 >
@@ -458,7 +471,7 @@ export const PuzzleView: React.FC<PuzzleViewProps> = ({
                   {isSlotFilled ? (
                     <div className="text-center">
                       <span className="text-base md:text-lg font-bold text-slate-900 capitalize block tracking-tight">
-                        {val}
+                        {itemLabel(val!)}
                       </span>
                       {!isTerminal && (
                         <span className="text-[10px] text-slate-400 group-hover:text-rose-500 transition-colors block mt-1">
@@ -501,7 +514,7 @@ export const PuzzleView: React.FC<PuzzleViewProps> = ({
 
                 return (
                   <button
-                    key={it}
+                    key={itemLabel(it)}
                     type="button"
                     onClick={() =>
                       setSelectedInventoryItem((prev) => (prev === it ? null : it))
@@ -514,7 +527,7 @@ export const PuzzleView: React.FC<PuzzleViewProps> = ({
                         : 'bg-white text-slate-700 border-slate-200 hover:border-slate-400 shadow-2xs'
                     }`}
                   >
-                    {it}
+                    {itemLabel(it)}
                     {isPlaced && <span className="ml-1 text-[10px]">(已放)</span>}
                   </button>
                 );
@@ -525,7 +538,7 @@ export const PuzzleView: React.FC<PuzzleViewProps> = ({
 
         {/* Bottom Actions Row */}
         {!isTerminal && (
-          <div className="pt-4 border-t border-slate-100 flex flex-wrap items-center justify-between gap-3">
+          <div className="pt-3 border-t border-slate-100 flex flex-wrap items-center justify-between gap-3">
             <div className="text-xs text-slate-500">
               已檢查嘗試次數：<span className="font-mono font-bold text-slate-700">{attempts}</span> 次
             </div>
@@ -534,10 +547,10 @@ export const PuzzleView: React.FC<PuzzleViewProps> = ({
               <button
                 type="button"
                 onClick={handleOpenDecision}
-                disabled={loadingAction !== null}
+                disabled={loadingAction !== null || Boolean(trial.public_state.primary_decision_committed)}
                 className={`py-2.5 px-4 rounded-xl text-xs font-semibold transition-all flex items-center space-x-1.5 border ${
                   isOver45s
-                    ? 'bg-amber-500 hover:bg-amber-600 text-white border-amber-500 shadow-sm shadow-amber-200 animate-pulse'
+                    ? 'bg-amber-500 hover:bg-amber-600 text-white border-amber-500 shadow-sm shadow-amber-200'
                     : 'bg-white hover:bg-slate-50 text-slate-700 border-slate-300'
                 }`}
               >
@@ -571,7 +584,7 @@ export const PuzzleView: React.FC<PuzzleViewProps> = ({
           status={trial.status}
           environmentId={trial.environment_id}
           isSolved={isSolved}
-          solution={followupSolution}
+          solution={followupSolution?.map(itemLabel)}
           hasFeedbackSubmitted={Boolean(trial.public_state.feedback)}
           onSubmitFeedback={async (fb) => {
             await api.submitFeedback(
@@ -604,7 +617,8 @@ export const PuzzleView: React.FC<PuzzleViewProps> = ({
         <DecisionModal
           trialId={trial.trial_id}
           stateVersion={trial.state_version}
-          actionSpecs={trial.action_specs}
+          actionSpecs={orderedSpecs}
+          onSkip={() => onSkip(trial.active_play_ms)}
           onSubmit={handleCommitDecision}
           loading={loadingAction === 'commit_decision'}
           error={actionError}

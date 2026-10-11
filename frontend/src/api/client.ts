@@ -19,7 +19,7 @@ export class ApiError extends Error {
   }
 }
 
-async function request<T>(url: string, options: RequestInit = {}): Promise<T> {
+async function rawRequest<T>(url: string, options: RequestInit = {}): Promise<T> {
   const headers = new Headers(options.headers || {});
   if (!headers.has('Content-Type') && options.body && typeof options.body === 'string') {
     headers.set('Content-Type', 'application/json');
@@ -47,7 +47,48 @@ async function request<T>(url: string, options: RequestInit = {}): Promise<T> {
   return response.json() as Promise<T>;
 }
 
+// Serialize trial mutations. Refresh the version at dispatch for ordinary operations;
+// decision requests are immutable and must never be rewritten on retry.
+const queues = new Map<string, Promise<unknown>>();
+function request<T>(url: string, options: RequestInit = {}): Promise<T> {
+  const match = url.match(/^\/api\/trials\/([^/]+)\/([^/]+)$/);
+  if (!match || options.method !== 'POST') return rawRequest<T>(url, options);
+  const [, id, operation] = match;
+  const task = (queues.get(id) || Promise.resolve()).catch(() => {}).then(async () => {
+    if (operation !== 'decision' && operation !== 'next') {
+      const fresh = await rawRequest<ParticipantTrialView>(`/api/trials/${id}`, { headers: options.headers });
+      if ((operation === 'pause' && fresh.status === 'paused') ||
+          (operation === 'resume' && fresh.status === 'active') ||
+          (operation === 'open-decision' && fresh.status === 'decision_open') ||
+          (operation === 'checkpoint' && fresh.status !== 'active')) return fresh as T;
+      const body = JSON.parse(options.body as string);
+      body.state_version = fresh.state_version;
+      if ('active_play_ms' in body) body.active_play_ms = fresh.status === 'active'
+        ? Math.max(body.active_play_ms, fresh.active_play_ms) : fresh.active_play_ms;
+      options = { ...options, body: JSON.stringify(body) };
+    }
+    return rawRequest<T>(url, options);
+  });
+  queues.set(id, task);
+  return task;
+}
+
+// The API client is also used by Node-based local verification scripts.
+const pendingStorage = typeof localStorage === 'undefined' ? {
+  getItem: (_key: string): string | null => null,
+  setItem: (_key: string, _value: string) => {},
+  removeItem: (_key: string) => {},
+} : localStorage;
+
+export type DecisionPayload = Parameters<typeof api.commitDecision>[1];
+export const pendingKey = (id: string) => `preference_lab_pending_${id}`;
+
 export const api = {
+  async checkpoint(trialId: string, activePlayMs: number, sessionToken: string) {
+    return request<Pick<ParticipantTrialView, 'status' | 'state_version' | 'public_state' | 'active_play_ms'>>(
+      `/api/trials/${trialId}/checkpoint`, { method: 'POST', headers: { 'X-Session-Token': sessionToken },
+        body: JSON.stringify({ active_play_ms: activePlayMs, state_version: 0 }) });
+  },
   // Participant endpoints
   async joinSession(sessionCode: string): Promise<JoinSessionResponse> {
     return request<JoinSessionResponse>('/api/sessions/join', {
@@ -142,11 +183,23 @@ export const api = {
     },
     sessionToken: string
   ): Promise<CommitDecisionResponse> {
-    return request<CommitDecisionResponse>(`/api/trials/${trialId}/decision`, {
+    const key = pendingKey(trialId);
+    const saved = pendingStorage.getItem(key);
+    const frozen = saved ? JSON.parse(saved) : payload;
+    pendingStorage.setItem(key, JSON.stringify(frozen));
+    let result: CommitDecisionResponse;
+    try { result = await request<CommitDecisionResponse>(`/api/trials/${trialId}/decision`, {
       method: 'POST',
       headers: { 'X-Session-Token': sessionToken },
-      body: JSON.stringify(payload),
-    });
+      body: JSON.stringify(frozen),
+    }); } catch (err) {
+      // A version rejection is definitive: nothing was committed. A subsequent
+      // confirmation is a new request; transport failures keep the frozen request.
+      if (err instanceof ApiError && err.isStateVersionConflict) pendingStorage.removeItem(key);
+      throw err;
+    }
+    pendingStorage.removeItem(key);
+    return result;
   },
 
   async nextTrial(

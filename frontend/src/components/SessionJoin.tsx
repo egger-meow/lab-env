@@ -35,7 +35,7 @@ export const SessionJoin: React.FC<SessionJoinProps> = ({
             加入研究試驗
           </h2>
           <p className="text-sm text-slate-500 mt-2 leading-relaxed">
-            歡迎參與實驗！請輸入研究人員提供的 6 位代碼以開始試驗。
+            歡迎參與實驗！請輸入研究人員提供的 PL-XXXX 格式代碼以開始試驗。
           </p>
         </div>
 
@@ -68,7 +68,7 @@ export const SessionJoin: React.FC<SessionJoinProps> = ({
               maxLength={8}
               value={sessionCode}
               onChange={(e) => setSessionCode(e.target.value.toUpperCase())}
-              placeholder="例如: AB12CD"
+              placeholder="例如: PL-1A2B"
               className="w-full text-center tracking-widest text-2xl font-mono font-bold uppercase py-3 px-4 rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-sky-500 focus:border-transparent transition-all placeholder:text-slate-300 placeholder:font-normal placeholder:tracking-normal placeholder:text-base"
             />
           </div>

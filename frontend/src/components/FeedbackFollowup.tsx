@@ -82,7 +82,7 @@ export const FeedbackFollowup: React.FC<FeedbackFollowupProps> = ({
         <div>
           <h3 className="text-lg font-bold text-slate-900 tracking-tight">
             {isCompletedDirect
-              ? '恭喜！棋盤已在決策前順利解出'
+              ? '棋盤已在決策前解出'
               : isCompletedWithDecision
               ? '本題已順利完成！'
               : isSkippedOrAborted

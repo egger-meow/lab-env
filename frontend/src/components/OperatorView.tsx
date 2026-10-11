@@ -160,7 +160,7 @@ export const OperatorView: React.FC = () => {
                 onChange={(e) => setMode(e.target.value)}
                 className="w-full text-xs py-2 px-3 rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-sky-500"
               >
-                <option value="pilot">正式試驗 (Pilot / 4 題 + 2 教學/練習)</option>
+                <option value="pilot">先導試驗 (Pilot / 4 題 + 2 教學/練習)</option>
                 <option value="practice">純練習模式 (Practice)</option>
               </select>
             </div>

@@ -1,8 +1,12 @@
-import React, { useState, useEffect, useRef } from 'react';
+import { useDraftState } from '../useDraftState';
+import React, { useState, useRef, useEffect } from 'react';
+import type { DecisionPayload } from '../api/client';
+import { pendingKey } from '../api/client';
 import { HelpCircle, AlertTriangle, Check, ShieldAlert } from 'lucide-react';
 import type { ActionSpec } from '../types';
 
 interface DecisionModalProps {
+  onSkip: () => Promise<void>;
   trialId: string;
   stateVersion: number;
   actionSpecs: ActionSpec[];
@@ -21,6 +25,7 @@ interface DecisionModalProps {
 }
 
 export const DecisionModal: React.FC<DecisionModalProps> = ({
+  onSkip,
   trialId,
   stateVersion,
   actionSpecs,
@@ -28,23 +33,37 @@ export const DecisionModal: React.FC<DecisionModalProps> = ({
   loading,
   error,
 }) => {
-  const [acceptableMap, setAcceptableMap] = useState<Record<string, string>>({});
-  const [selectedActionId, setSelectedActionId] = useState<string | null>(null);
-  const [reason, setReason] = useState<string>('');
-  const [overrideConfirmed, setOverrideConfirmed] = useState<boolean>(false);
+  const [acceptableMap, setAcceptableMap] = useDraftState<Record<string, string>>( trialId, 'acceptableMap', {});
+  const [selectedActionId, setSelectedActionId] = useDraftState<string | null>( trialId, 'selectedActionId', null);
+  const [reason, setReason] = useDraftState<string>( trialId, 'reason', '');
+  const [overrideConfirmed, setOverrideConfirmed] = useDraftState<boolean>( trialId, 'overrideConfirmed', false);
   const [validationError, setValidationError] = useState<string | null>(null);
 
-  const startTimeRef = useRef<number>(Date.now());
+  const [startedAt] = useDraftState<number>(trialId, 'startedAt', Date.now());
+  const startTimeRef = useRef<number>(startedAt);
   const idempotencyKeyRef = useRef<string>(`dec_${trialId}_v${stateVersion}_${Date.now()}`);
 
+  const frozenRef = useRef<DecisionPayload | null>(JSON.parse(localStorage.getItem(pendingKey(trialId)) || 'null'));
   useEffect(() => {
-    startTimeRef.current = Date.now();
-  }, []);
-
-  useEffect(() => {
-    idempotencyKeyRef.current = `dec_${trialId}_v${stateVersion}_${Date.now()}`;
+    if (!localStorage.getItem(pendingKey(trialId))) {
+      frozenRef.current = null;
+      idempotencyKeyRef.current = `dec_${trialId}_${crypto.randomUUID()}`;
+    }
   }, [trialId, stateVersion]);
-
+  const dialogRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const previous = document.activeElement as HTMLElement;
+    const dialog = dialogRef.current!;
+    const trap = (event: KeyboardEvent) => {
+      if (event.key !== 'Tab') return;
+      const controls = [...dialog.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled), textarea:not(:disabled)')];
+      const first = controls[0], last = controls[controls.length - 1];
+      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
+      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
+    };
+    dialog.addEventListener('keydown', trap);
+    return () => { dialog.removeEventListener('keydown', trap); previous?.focus(); };
+  }, []);
   const handleSelectAcceptability = (actionId: string, val: 'yes' | 'no' | 'unsure') => {
     setAcceptableMap((prev) => ({ ...prev, [actionId]: val }));
     setValidationError(null);
@@ -64,6 +83,7 @@ export const DecisionModal: React.FC<DecisionModalProps> = ({
     e.preventDefault();
     setValidationError(null);
 
+    if (frozenRef.current) { await onSubmit(frozenRef.current); return; }
     // 1. Validate all actions have an acceptability evaluation
     for (const spec of actionSpecs) {
       if (!acceptableMap[spec.action_id]) {
@@ -87,22 +107,24 @@ export const DecisionModal: React.FC<DecisionModalProps> = ({
 
     const deliberationMs = Math.max(0, Date.now() - startTimeRef.current);
 
-    await onSubmit({
+    frozenRef.current = {
       idempotency_key: idempotencyKeyRef.current,
       acceptable_by_action: acceptableMap,
       selected_action_id: selectedActionId,
-      preferred_action_ids: [selectedActionId],
+
       deliberation_ms: deliberationMs,
       state_version: stateVersion,
       reason: reason.trim() ? reason.trim() : undefined,
       selection_acceptability_override: isSelectedActionMarkedNo,
-    });
+    };
+    localStorage.setItem(pendingKey(trialId), JSON.stringify(frozenRef.current));
+    await onSubmit(frozenRef.current);
   };
 
   return (
-    <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 overflow-y-auto">
-      <div className="bg-white rounded-2xl shadow-2xl max-w-2xl w-full my-8 p-6 md:p-8 border border-slate-200 animate-in fade-in zoom-in-95 duration-200">
-        <div className="flex items-center space-x-3 pb-4 border-b border-slate-100">
+    <div ref={dialogRef} role="dialog" aria-modal="true" aria-label="偏好決策" className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 overflow-y-auto">
+      <div className="bg-white rounded-2xl shadow-2xl max-w-2xl w-full max-h-[94vh] overflow-y-auto p-4 md:p-5 border border-slate-200 animate-in fade-in zoom-in-95 duration-200">
+        <div className="flex items-center space-x-3 pb-2 border-b border-slate-100">
           <div className="w-10 h-10 rounded-xl bg-amber-50 text-amber-600 flex items-center justify-center shrink-0 border border-amber-200/60 shadow-sm">
             <HelpCircle className="w-5 h-5" />
           </div>
@@ -116,28 +138,29 @@ export const DecisionModal: React.FC<DecisionModalProps> = ({
           </div>
         </div>
 
-        <div className="mt-4 p-3.5 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-600 leading-relaxed">
+        <div className="mt-2 p-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-600 leading-relaxed">
           <p className="font-semibold text-slate-800">作答指南：</p>
           <p>1. 對下方四個方案逐一標記是否可接受（可接受 / 不可接受 / 說不準）。</p>
           <p>2. 點選單選框以指定<strong>本次實際要執行的方案</strong>。</p>
         </div>
 
         {error && (
-          <div className="mt-4 p-3.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-xs flex items-start space-x-2">
+          <div className="mt-2 p-2.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-xs flex items-start space-x-2">
             <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" />
             <div className="font-medium">{error}</div>
           </div>
         )}
 
         {validationError && (
-          <div className="mt-4 p-3.5 rounded-xl bg-amber-50 border border-amber-200 text-amber-800 text-xs flex items-start space-x-2">
+          <div className="mt-2 p-2.5 rounded-xl bg-amber-50 border border-amber-200 text-amber-800 text-xs flex items-start space-x-2">
             <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" />
             <div className="font-medium">{validationError}</div>
           </div>
         )}
 
-        <form onSubmit={handleSubmit} className="mt-6 space-y-4">
-          <div className="space-y-3">
+        <button autoFocus type="button" onClick={onSkip} className="mt-2 px-3 py-1.5 border rounded-lg">無法決定，跳過此題</button>
+        <form onSubmit={handleSubmit} className="mt-3 space-y-3">
+          <div className="space-y-2">
             {actionSpecs.map((spec) => {
               const isSelected = selectedActionId === spec.action_id;
               const currentRating = acceptableMap[spec.action_id];
@@ -145,7 +168,7 @@ export const DecisionModal: React.FC<DecisionModalProps> = ({
               return (
                 <div
                   key={spec.action_id}
-                  className={`p-4 rounded-xl border transition-all ${
+                  className={`p-3 rounded-xl border transition-all ${
                     isSelected
                       ? 'border-sky-500 bg-sky-50/40 ring-2 ring-sky-500/20 shadow-sm'
                       : 'border-slate-200 bg-white hover:border-slate-300'
@@ -177,6 +200,7 @@ export const DecisionModal: React.FC<DecisionModalProps> = ({
                         <button
                           key={val}
                           type="button"
+                          aria-pressed={currentRating === val}
                           onClick={() => handleSelectAcceptability(spec.action_id, val)}
                           className={`px-2.5 py-1 text-xs font-semibold rounded-md transition-all ${
                             currentRating === val

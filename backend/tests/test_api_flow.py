@@ -1213,3 +1213,43 @@ def test_paused_trial_freezes_play_time_for_skip_and_abort(client):
 
 
 
+
+
+def test_primary_once_and_persistent_followup_deadline(client):
+    created = client.post("/api/operator/sessions", headers={"X-Operator-Token": OPERATOR_TOKEN}, json={}).json()
+    joined = client.post("/api/sessions/join", json={"session_code": created["session"]["session_code"]}).json()
+    tid = joined["current_trial_id"]
+    headers = {"X-Session-Token": joined["session_token"]}
+    url = f"/api/trials/{tid}"
+    trial = client.get(url, headers=headers).json()
+    checkpoint = client.post(url + "/checkpoint", headers=headers, json={"active_play_ms": 45000, "state_version": trial["state_version"]})
+    assert checkpoint.status_code == 200
+    opened = client.post(url + "/open-decision", headers=headers, json={"active_play_ms": 45000, "state_version": checkpoint.json()["state_version"]}).json()
+    payload = {"idempotency_key": "synthetic-followup-test", "acceptable_by_action": {a: "unsure" for a in trial["display_order"]}, "selected_action_id": "continue", "deliberation_ms": 1000, "state_version": opened["state_version"]}
+    committed = client.post(url + "/decision", headers=headers, json=payload)
+    assert committed.status_code == 200
+    trial = client.get(url, headers=headers).json()
+    assert trial["public_state"]["post_decision_started_ms"] == 45000
+    assert client.post(url + "/open-decision", headers=headers, json={"active_play_ms": 46000, "state_version": trial["state_version"]}).status_code == 400
+    before = client.post(url + "/checkpoint", headers=headers, json={"active_play_ms": 89999, "state_version": trial["state_version"]}).json()
+    assert before["status"] == "active"
+    after = client.post(url + "/checkpoint", headers=headers, json={"active_play_ms": 90200, "state_version": before["state_version"]}).json()
+    assert after["status"] == "completed"
+    assert after["active_play_ms"] == 90000
+    assert after["public_state"]["followup_timeout"] is True
+    assert client.post(url + "/decision", headers=headers, json=payload).json()["idempotent"] is True
+    assert client.post(url + "/checkpoint", headers=headers, json={"active_play_ms": 91000, "state_version": after["state_version"]}).status_code == 400
+
+
+def test_checkpoint_auth_version_and_monotonicity(client):
+    created = client.post("/api/operator/sessions", headers={"X-Operator-Token": OPERATOR_TOKEN}, json={}).json()
+    joined = client.post("/api/sessions/join", json={"session_code": created["session"]["session_code"]}).json()
+    url = f"/api/trials/{joined['current_trial_id']}"
+    headers = {"X-Session-Token": joined["session_token"]}
+    trial = client.get(url, headers=headers).json()
+    body = {"active_play_ms": 5000, "state_version": trial["state_version"]}
+    assert client.post(url + "/checkpoint", json=body).status_code == 401
+    assert client.post(url + "/checkpoint", headers=headers, json=body).status_code == 200
+    assert client.post(url + "/checkpoint", headers=headers, json=body).status_code == 400
+    fresh = client.get(url, headers=headers).json()
+    assert client.post(url + "/checkpoint", headers=headers, json={"active_play_ms": 4999, "state_version": fresh["state_version"]}).status_code == 400
