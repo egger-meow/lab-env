@@ -1,3 +1,4 @@
+import { usePendingDecision } from '../usePendingDecision';
 import { useDraftState } from '../useDraftState';
 import React, { useState, useRef } from 'react';
 import {
@@ -30,6 +31,7 @@ export const BretView: React.FC<BretViewProps> = ({
   onPause,
   hasNext,
 }) => {
+  const pending = usePendingDecision(trial.trial_id);
   const stimulus = trial.public_stimulus;
   const numBoxes = stimulus?.num_boxes || 100;
   const rewardPerBox = stimulus?.reward_per_box || 1;
@@ -53,7 +55,7 @@ export const BretView: React.FC<BretViewProps> = ({
 
   const [startedAt] = useDraftState<number>(trial.trial_id, 'startedAt', Date.now());
   const startTimeRef = useRef<number>(startedAt);
-  const idempotencyKeyRef = useRef<string>(`bret_${trial.trial_id}_v${trial.state_version}_${Date.now()}`);
+
 
   const openingRef = useRef(false);
   React.useEffect(() => {
@@ -140,20 +142,20 @@ export const BretView: React.FC<BretViewProps> = ({
     e.preventDefault();
     setErrorMessage(null);
 
-    for (const opt of options) {
+    for (const opt of pending ? [] : options) {
       if (!acceptableMap[opt.action_id]) {
         setErrorMessage(`請對所有方案標記是否可接受（尚未評估取 ${opt.k} 箱方案）`);
         return;
       }
     }
 
-    if (!selectedActionId) {
+    if (!pending && !selectedActionId) {
       setErrorMessage('請選擇本輪實際要執行的取箱方案');
       return;
     }
 
-    const isMarkedNo = acceptableMap[selectedActionId] === 'no';
-    if (isMarkedNo && !overrideConfirmed) {
+    const isMarkedNo = selectedActionId ? acceptableMap[selectedActionId] === 'no' : false;
+    if (!pending && isMarkedNo && !overrideConfirmed) {
       setErrorMessage('您選擇了標記為不可接受的方案，請勾選確認方可提交');
       return;
     }
@@ -163,10 +165,10 @@ export const BretView: React.FC<BretViewProps> = ({
     try {
       const res = await api.commitDecision(
         trial.trial_id,
-        {
-          idempotency_key: idempotencyKeyRef.current,
+        pending || {
+          idempotency_key: `bret_${trial.trial_id}_${crypto.randomUUID()}`,
           acceptable_by_action: acceptableMap,
-          selected_action_id: selectedActionId,
+          selected_action_id: selectedActionId!,
 
           deliberation_ms: deliberationMs,
           state_version: trial.state_version,
@@ -191,7 +193,7 @@ export const BretView: React.FC<BretViewProps> = ({
       if (err instanceof ApiError && err.isStateVersionConflict) {
         const fresh = await api.getTrial(trial.trial_id, sessionToken);
         onTrialUpdated(fresh);
-        setErrorMessage('版本衝突，已為您同步最新資料，請重試');
+        setErrorMessage('版本衝突，已同步最新資料；請檢查後重新確認回答');
       } else {
         setErrorMessage(err.message || '提交決策失敗');
       }
@@ -234,6 +236,7 @@ export const BretView: React.FC<BretViewProps> = ({
           {!isCompleted && (
             <button
               type="button"
+              disabled={!!pending || !!loadingAction}
               onClick={() => onSkip(trial.active_play_ms)}
               className="px-3 py-1.5 rounded-xl border border-slate-200 bg-white hover:bg-rose-50 hover:text-rose-700 text-slate-600 text-xs font-semibold shadow-2xs transition-all"
             >
@@ -243,7 +246,7 @@ export const BretView: React.FC<BretViewProps> = ({
         </div>
       </div>
 
-      {errorMessage && (
+      {errorMessage && !pending && (
         <div className="p-3.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-xs flex items-start space-x-2">
           <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" />
           <div className="font-medium">{errorMessage}</div>
@@ -518,14 +521,16 @@ export const BretView: React.FC<BretViewProps> = ({
           {/* Action Cards Selection (if not yet committed) */}
           {!bombRevealed && !isCompleted && (
             <form onSubmit={handleDecisionSubmit} className="space-y-4 pt-2">
+              {pending && <p role="status" className="text-sm text-amber-800">提交結果尚未確認；下方顯示原回答並已鎖定。請重試原提交。</p>}
+              <fieldset disabled={!!loadingAction || !!pending} className="space-y-4">
               <h3 className="text-xs font-bold text-slate-700 uppercase tracking-wider">
                 請在下方 4 項方案中表達可接受性，並指定執行方案：
               </h3>
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                 {options.map((opt) => {
-                  const isSelected = selectedActionId === opt.action_id;
-                  const currentRating = acceptableMap[opt.action_id];
+                  const isSelected = (pending?.selected_action_id ?? selectedActionId) === opt.action_id;
+                  const currentRating = (pending?.acceptable_by_action ?? acceptableMap)[opt.action_id];
                   const hitProb = Math.round((opt.k / numBoxes) * 100);
                   const safeProb = 100 - hitProb;
                   const safePayoff = opt.k * rewardPerBox;
@@ -595,7 +600,7 @@ export const BretView: React.FC<BretViewProps> = ({
                 })}
               </div>
 
-              {selectedActionId && acceptableMap[selectedActionId] === 'no' && (
+              {(pending ? pending.acceptable_by_action[pending.selected_action_id] === 'no' : selectedActionId && acceptableMap[selectedActionId] === 'no') && (
                 <div className="p-3.5 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-900 space-y-1.5">
                   <span className="font-semibold block">中性確認提醒：</span>
                   <p className="text-slate-600">
@@ -604,7 +609,7 @@ export const BretView: React.FC<BretViewProps> = ({
                   <label className="flex items-center space-x-2 pt-1 cursor-pointer font-medium text-slate-800">
                     <input
                       type="checkbox"
-                      checked={overrideConfirmed}
+                      checked={pending ? !!pending.selection_acceptability_override : overrideConfirmed}
                       onChange={(e) => setOverrideConfirmed(e.target.checked)}
                       className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
                     />
@@ -618,7 +623,7 @@ export const BretView: React.FC<BretViewProps> = ({
                   簡短決策理由說明（選填）：
                 </label>
                 <textarea
-                  value={reason}
+                  value={pending ? pending.reason || '' : reason}
                   onChange={(e) => setReason(e.target.value)}
                   placeholder="說明您做此選擇的考量..."
                   rows={2}
@@ -626,6 +631,7 @@ export const BretView: React.FC<BretViewProps> = ({
                 />
               </div>
 
+              </fieldset>
               <div className="flex justify-end pt-2">
                 <button
                   type="submit"
@@ -637,7 +643,7 @@ export const BretView: React.FC<BretViewProps> = ({
                   ) : (
                     <>
                       <Sparkles className="w-4 h-4" />
-                      <span>確認並執行此方案</span>
+                      <span>{pending ? '重試原提交' : '確認並執行此方案'}</span>
                     </>
                   )}
                 </button>

@@ -1,8 +1,8 @@
 # Part C review fixes and browser evidence
 
-Reviewed baseline: `ea249be`. Verification date: 2026-10-11 (Asia/Taipei).
+Reviewed baselines: `ea249be` and `a3ae3ae`. Verification date: 2026-10-12 (Asia/Taipei).
 
-All screenshots and browser records use a separate local SQLite database and the participant ID `llm_synthetic_part_c_e2e`. They are automated test evidence, not human research observations. Databases, browser profiles and session tokens stay in ignored `runs/part-c/`.
+All screenshots and browser records use a separate local SQLite database and the participant ID `llm_synthetic_part_c_e2e`. The server runs with `PREFERENCE_LAB_DECISION_SOURCE=synthetic_mock`, so DecisionRecord provenance, SQLite and downloaded ZIP all identify them as synthetic. They are automated test evidence, not human research observations. Databases, browser profiles and session tokens stay in ignored `runs/part-c/`.
 
 ## Corrections
 
@@ -18,15 +18,22 @@ All screenshots and browser records use a separate local SQLite database and the
 
 Also corrected Chinese labels and clue text, the authoritative `revealed_hint` field, BRET tutorial data bindings, the modal skip button and keyboard focus loop, neutral outcome/pilot copy, `PL-XXXX` entry instructions, and `?view=operator`. Puzzle controls and the default decision modal fit at 1280×720. BRET uses ordinary vertical scrolling; the pilot screenshot shows all choices and the submit control.
 
+## Followup review corrections at a3ae3ae
+
+- Removed arbitrary fresh-version substitution. A queued command can advance its captured version only through successful predecessor requests that were already pending in this same client when it was enqueued. Failed predecessors block dependents. External writes still cause a server version conflict, synchronize the participant view, and ask for reconfirmation; no stale board/check is automatically replayed.
+- Puzzle and BRET retain and show the frozen submission on uncertain transport failure. Choice, ratings, reason, override and skip controls are disabled; the explicit button says “重試原提交”. A definitive state-version rejection clears the pending request and permits editing and a new confirmation/key. Other failures retain the request conservatively.
+- Decision provenance is controlled only by the trusted server configuration `PREFERENCE_LAB_DECISION_SOURCE` (`human_gui` by default; `synthetic_mock` for isolated tests). Invalid values fail; participant JSON cannot override it. API integration tests verify persisted SQLite and ZIP source values for both configurations.
+- The researcher's ZIP control now downloads with the operator authentication header. The browser creates the main session through the researcher form, opens its completed detail, clicks ZIP export, waits for the actual downloaded file, then compares its nonempty decision IDs and sources with SQLite.
+
 ## Actual verification
 
-- Backend: **67 passed, 1 warning** (Starlette's httpx deprecation).
+- Backend: **69 passed, 1 warning** (Starlette's httpx deprecation).
 - Frontend: `npm run build` passed.
-- Frontend: `npm run lint` passed with **19 warnings**, primarily React effect/ref/dependency diagnostics; this is not a warning-free result. Lint is scoped to source, scripts and Vite configuration so installed dependencies are not lint targets.
-- Chrome headless at **1280×720**: **79 logged checks passed**, plus strict equality/order assertions. No browser runtime exceptions.
+- Frontend: `npm run lint` passed with **18 warnings**, primarily React effect/ref/dependency diagnostics; this is not a warning-free result. Lint is scoped to source, scripts and Vite configuration so installed dependencies are not lint targets.
+- Chrome headless at **1280×720**: **110 logged checks passed**, plus strict equality/order assertions. No browser runtime exceptions.
 - Every failed assertion throws and exits nonzero. Earlier failures exposed the duplicate StrictMode restore and missing BRET tutorial bindings; those runs were not reported as passes.
 
-The browser session traverses all 12 trials: first Puzzle uses continue and the real 45-second followup timeout; second Puzzle skips via keyboard from the decision modal; third submits hint and then skips; the remaining three submit solution. Both BRET tutorials complete, and all four BRET pilot rounds submit and reveal their results. It checks visible timer resets, blank answers, saved display order, draft and active-time reload recovery, actual tab-switch pause, focus wrapping, and a lost response injected after server acceptance. The retry is byte-for-byte identical and produces one decision record and one primary opening.
+The browser session traverses all 12 trials: first Puzzle uses continue and the real 45-second followup timeout; second Puzzle skips via keyboard from the decision modal; third submits hint and then skips; the remaining three submit solution. Definitive version rejection is tested in both decision forms, followed by changing and successfully committing a new choice. BRET also loses an accepted response, locks the form, and retries the exact original payload through its explicit button. Two independent browser windows reproduce caller version 1 versus server version 9 for board and check-answer; a further check interleaves an external write between locally queued commands and asserts rejection. Both BRET tutorials complete, and all four BRET pilot rounds submit and reveal their results. It checks visible timer resets, blank answers, saved display order, draft and active-time reload recovery, actual tab-switch pause, focus wrapping, and a lost response injected after server acceptance. The retry is byte-for-byte identical and produces one decision record and one primary opening.
 
 Run from `frontend/`:
 
@@ -56,6 +63,10 @@ All captures are viewport images, not long-page screenshots.
 - [BRET pilot choices](part-c-evidence/bret-pilot.png)
 - [BRET result](part-c-evidence/bret-result.png)
 - [Operator](part-c-evidence/operator.png)
+- [Operator creation](part-c-evidence/operator-created.png)
+- [Operator completed detail](part-c-evidence/operator-detail.png)
+- [Puzzle pending original submission](part-c-evidence/puzzle-pending.png)
+- [BRET pending original submission](part-c-evidence/bret-pending.png)
 - [Machine-readable assertions](part-c-evidence/report.json)
 
 ## Remaining limits

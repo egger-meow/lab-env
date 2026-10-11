@@ -16,7 +16,7 @@ OPERATOR_TOKEN = "dev-operator-token-local"
 @pytest.fixture
 def client(tmp_path):
     storage = Storage(":memory:")
-    service = LabService(storage)
+    service = LabService(storage, decision_source="synthetic_mock")
 
     app.dependency_overrides[get_service] = lambda: service
     test_client = TestClient(app)
@@ -1253,3 +1253,32 @@ def test_checkpoint_auth_version_and_monotonicity(client):
     assert client.post(url + "/checkpoint", headers=headers, json=body).status_code == 400
     fresh = client.get(url, headers=headers).json()
     assert client.post(url + "/checkpoint", headers=headers, json={"active_play_ms": 4999, "state_version": fresh["state_version"]}).status_code == 400
+
+
+@pytest.mark.parametrize("source", ["human_gui", "synthetic_mock"])
+def test_server_source_persists_in_sqlite_and_export(tmp_path, monkeypatch, source):
+    import importlib
+    import sqlite3
+    module = importlib.import_module("preference_lab.api.app")
+    db = tmp_path / "source.sqlite3"
+    monkeypatch.setenv("PREFERENCE_LAB_DB", str(db))
+    monkeypatch.setenv("PREFERENCE_LAB_DECISION_SOURCE", source)
+    monkeypatch.setattr(module, "_service", None)
+    monkeypatch.setattr(module, "_storage", None)
+    with TestClient(app) as client:
+        created = client.post("/api/operator/sessions", headers={"X-Operator-Token": OPERATOR_TOKEN}, json={}).json()
+        joined = client.post("/api/sessions/join", json={"session_code": created["session"]["session_code"]}).json()
+        url = f"/api/trials/{joined['current_trial_id']}"
+        headers = {"X-Session-Token": joined["session_token"]}
+        trial = client.get(url, headers=headers).json()
+        opened = client.post(url + "/open-decision", headers=headers, json={"active_play_ms": 0, "state_version": trial["state_version"]}).json()
+        payload = {"idempotency_key": "source-check", "acceptable_by_action": {a: "unsure" for a in trial["display_order"]}, "selected_action_id": "continue", "deliberation_ms": 1000, "state_version": opened["state_version"], "source": "human_import"}
+        assert client.post(url + "/decision", headers=headers, json=payload).status_code == 200
+        with sqlite3.connect(db) as conn:
+            rows = conn.execute("SELECT source FROM decisions").fetchall()
+        assert rows == [(source,)]
+        exported = client.get(f"/api/operator/sessions/{created['session']['session_id']}/export", headers={"X-Operator-Token": OPERATOR_TOKEN})
+        assert exported.status_code == 200
+        with zipfile.ZipFile(io.BytesIO(exported.content)) as package:
+            decisions = json.loads(package.read("decisions.json"))
+        assert [decision["source"] for decision in decisions] == [source]

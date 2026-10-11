@@ -97,6 +97,21 @@ export const OperatorView: React.FC = () => {
     }
   };
 
+  const handleExport = async () => {
+    try {
+      const response = await fetch(api.getExportZipUrl(selectedSessionId!), {
+        headers: { 'X-Operator-Token': operatorToken },
+      });
+      if (!response.ok) throw new Error(`匯出失敗 (${response.status})`);
+      const url = URL.createObjectURL(await response.blob());
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `session_${selectedSessionId}_export.zip`;
+      link.click();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch (err) { setError((err as Error).message); }
+  };
+
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-8">
       {/* Operator Token Bar */}
@@ -335,14 +350,14 @@ export const OperatorView: React.FC = () => {
 
             <div className="flex items-center space-x-3">
               {/* One-click Export ZIP button (Spec 10.4) */}
-              <a
-                href={api.getExportZipUrl(sessionDetail.session.session_id)}
-                download
+              <button
+                type="button"
+                onClick={handleExport}
                 className="py-2.5 px-4 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-semibold shadow-md shadow-emerald-200 transition-all flex items-center space-x-1.5"
               >
                 <Download className="w-4 h-4" />
                 <span>匯出完整 Session ZIP</span>
-              </a>
+              </button>
               <button
                 type="button"
                 onClick={() => setSelectedSessionId(null)}

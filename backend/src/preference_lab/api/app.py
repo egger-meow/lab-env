@@ -42,7 +42,7 @@ def get_service() -> LabService:
         if db_file != ":memory:":
             Path(db_file).parent.mkdir(parents=True, exist_ok=True)
         _storage = Storage(db_file)
-        _service = LabService(_storage)
+        _service = LabService(_storage, decision_source=os.environ.get("PREFERENCE_LAB_DECISION_SOURCE", "human_gui"))
     return _service
 
 

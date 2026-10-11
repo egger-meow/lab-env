@@ -121,7 +121,7 @@ export const PuzzleView: React.FC<PuzzleViewProps> = ({
       void handleOpenDecision().finally(() => { busyRef.current = false; });
     } else if (followupDue || activePlayMs - trial.active_play_ms >= 5000) {
       busyRef.current = true;
-      void api.checkpoint(trial.trial_id, activePlayMs, sessionToken)
+      void api.checkpoint(trial.trial_id, activePlayMs, trial.state_version, sessionToken)
         .then(res => {
           if (res.status !== 'active') {
             localStorage.setItem(timeKey, String(res.active_play_ms));

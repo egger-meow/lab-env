@@ -1,7 +1,6 @@
 import { useDraftState } from '../useDraftState';
 import React, { useState, useRef, useEffect } from 'react';
-import type { DecisionPayload } from '../api/client';
-import { pendingKey } from '../api/client';
+import { usePendingDecision } from '../usePendingDecision';
 import { HelpCircle, AlertTriangle, Check, ShieldAlert } from 'lucide-react';
 import type { ActionSpec } from '../types';
 
@@ -41,15 +40,9 @@ export const DecisionModal: React.FC<DecisionModalProps> = ({
 
   const [startedAt] = useDraftState<number>(trialId, 'startedAt', Date.now());
   const startTimeRef = useRef<number>(startedAt);
-  const idempotencyKeyRef = useRef<string>(`dec_${trialId}_v${stateVersion}_${Date.now()}`);
 
-  const frozenRef = useRef<DecisionPayload | null>(JSON.parse(localStorage.getItem(pendingKey(trialId)) || 'null'));
-  useEffect(() => {
-    if (!localStorage.getItem(pendingKey(trialId))) {
-      frozenRef.current = null;
-      idempotencyKeyRef.current = `dec_${trialId}_${crypto.randomUUID()}`;
-    }
-  }, [trialId, stateVersion]);
+
+  const pending = usePendingDecision(trialId);
   const dialogRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const previous = document.activeElement as HTMLElement;
@@ -77,13 +70,13 @@ export const DecisionModal: React.FC<DecisionModalProps> = ({
     }
   };
 
-  const isSelectedActionMarkedNo = selectedActionId ? acceptableMap[selectedActionId] === 'no' : false;
+  const isSelectedActionMarkedNo = pending ? pending.acceptable_by_action[pending.selected_action_id] === 'no' : selectedActionId ? acceptableMap[selectedActionId] === 'no' : false;
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setValidationError(null);
 
-    if (frozenRef.current) { await onSubmit(frozenRef.current); return; }
+    if (pending) { await onSubmit(pending); return; }
     // 1. Validate all actions have an acceptability evaluation
     for (const spec of actionSpecs) {
       if (!acceptableMap[spec.action_id]) {
@@ -107,8 +100,8 @@ export const DecisionModal: React.FC<DecisionModalProps> = ({
 
     const deliberationMs = Math.max(0, Date.now() - startTimeRef.current);
 
-    frozenRef.current = {
-      idempotency_key: idempotencyKeyRef.current,
+    const payload = {
+      idempotency_key: `dec_${trialId}_${crypto.randomUUID()}`,
       acceptable_by_action: acceptableMap,
       selected_action_id: selectedActionId,
 
@@ -117,8 +110,7 @@ export const DecisionModal: React.FC<DecisionModalProps> = ({
       reason: reason.trim() ? reason.trim() : undefined,
       selection_acceptability_override: isSelectedActionMarkedNo,
     };
-    localStorage.setItem(pendingKey(trialId), JSON.stringify(frozenRef.current));
-    await onSubmit(frozenRef.current);
+    await onSubmit(payload);
   };
 
   return (
@@ -144,7 +136,7 @@ export const DecisionModal: React.FC<DecisionModalProps> = ({
           <p>2. 點選單選框以指定<strong>本次實際要執行的方案</strong>。</p>
         </div>
 
-        {error && (
+        {error && !pending && (
           <div className="mt-2 p-2.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-xs flex items-start space-x-2">
             <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" />
             <div className="font-medium">{error}</div>
@@ -158,12 +150,14 @@ export const DecisionModal: React.FC<DecisionModalProps> = ({
           </div>
         )}
 
-        <button autoFocus type="button" onClick={onSkip} className="mt-2 px-3 py-1.5 border rounded-lg">無法決定，跳過此題</button>
+        <button autoFocus disabled={loading || !!pending} type="button" onClick={onSkip} className="mt-2 px-3 py-1.5 border rounded-lg">無法決定，跳過此題</button>
         <form onSubmit={handleSubmit} className="mt-3 space-y-3">
+          {pending && <p role="status" className="text-sm text-amber-800">提交結果尚未確認；下方顯示原回答並已鎖定。請重試原提交。</p>}
+          <fieldset disabled={loading || !!pending} className="space-y-3">
           <div className="space-y-2">
             {actionSpecs.map((spec) => {
-              const isSelected = selectedActionId === spec.action_id;
-              const currentRating = acceptableMap[spec.action_id];
+              const isSelected = (pending?.selected_action_id ?? selectedActionId) === spec.action_id;
+              const currentRating = (pending?.acceptable_by_action ?? acceptableMap)[spec.action_id];
 
               return (
                 <div
@@ -235,7 +229,7 @@ export const DecisionModal: React.FC<DecisionModalProps> = ({
               <label className="flex items-center space-x-2 pl-6 pt-1 cursor-pointer font-medium text-slate-800">
                 <input
                   type="checkbox"
-                  checked={overrideConfirmed}
+                  checked={pending ? !!pending.selection_acceptability_override : overrideConfirmed}
                   onChange={(e) => setOverrideConfirmed(e.target.checked)}
                   className="rounded border-slate-300 text-sky-600 focus:ring-sky-500"
                 />
@@ -252,13 +246,14 @@ export const DecisionModal: React.FC<DecisionModalProps> = ({
               id="reason"
               type="text"
               maxLength={150}
-              value={reason}
+              value={pending ? pending.reason || '' : reason}
               onChange={(e) => setReason(e.target.value)}
               placeholder="例如: 想先靠自己試試看，或希望直接得知下一步..."
               className="w-full text-xs py-2 px-3 rounded-lg border border-slate-300 focus:outline-none focus:ring-2 focus:ring-sky-500 placeholder:text-slate-400"
             />
           </div>
 
+          </fieldset>
           <div className="pt-2 flex justify-end">
             <button
               type="submit"
@@ -270,7 +265,7 @@ export const DecisionModal: React.FC<DecisionModalProps> = ({
               ) : (
                 <>
                   <Check className="w-4 h-4" />
-                  <span>確認並執行此方案</span>
+                  <span>{pending ? '重試原提交' : '確認並執行此方案'}</span>
                 </>
               )}
             </button>

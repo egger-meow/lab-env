@@ -46,6 +46,16 @@ export const App: React.FC = () => {
     }
   }, []);
 
+  useEffect(() => {
+    const conflict = (event: Event) => {
+      const fresh = (event as CustomEvent<ParticipantTrialView>).detail;
+      setCurrentTrial(previous => previous?.trial_id === fresh.trial_id ? fresh : previous);
+      showSyncToast('其他視窗已更新資料，已同步畫面；請檢查後重新確認操作。');
+    };
+    window.addEventListener('preference-lab-conflict', conflict);
+    return () => window.removeEventListener('preference-lab-conflict', conflict);
+  }, []);
+
   const handleJoinSession = async (code: string, clearOnError = true) => {
     setLoading(true);
     setJoinError(null);
@@ -182,10 +192,10 @@ export const App: React.FC = () => {
     }
   };
 
-  const showSyncToast = (msg: string) => {
+  function showSyncToast(msg: string) {
     setSyncToast(msg);
     setTimeout(() => setSyncToast(null), 3500);
-  };
+  }
 
   return (
     <div className="min-h-screen bg-slate-50 flex flex-col font-sans text-slate-900">
@@ -198,7 +208,7 @@ export const App: React.FC = () => {
       />
 
       {syncToast && (
-        <div className="fixed bottom-5 right-5 z-50 bg-slate-900 text-white text-xs px-4 py-2.5 rounded-xl shadow-xl flex items-center space-x-2 animate-in fade-in slide-in-from-bottom-2">
+        <div role="status" className="pointer-events-none fixed bottom-5 right-5 z-50 bg-slate-900 text-white text-xs px-4 py-2.5 rounded-xl shadow-xl flex items-center space-x-2 animate-in fade-in slide-in-from-bottom-2">
           <RotateCcw className="w-3.5 h-3.5 text-sky-400 animate-spin" />
           <span>{syncToast}</span>
         </div>

@@ -41,7 +41,10 @@ REPO_ROOT = cur
 
 
 class LabService:
-    def __init__(self, storage: Storage, repo_root: Path | None = None):
+    def __init__(self, storage: Storage, repo_root: Path | None = None, *, decision_source: str = "human_gui"):
+        if decision_source not in ("human_gui", "synthetic_mock"):
+            raise ValueError("Invalid server decision source")
+        self.decision_source = decision_source
         self.storage = storage
         self.repo_root = repo_root or REPO_ROOT
 
@@ -599,7 +602,7 @@ class LabService:
             selection_acceptability_override=selection_acceptability_override,
             answered_at=now_iso,
             deliberation_ms=deliberation_ms,
-            source="human_gui",
+            source=self.decision_source,
         )
 
         tp = self.storage.get_trial_private(trial_id)

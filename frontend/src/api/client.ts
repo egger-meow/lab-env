@@ -47,29 +47,46 @@ async function rawRequest<T>(url: string, options: RequestInit = {}): Promise<T>
   return response.json() as Promise<T>;
 }
 
-// Serialize trial mutations. Refresh the version at dispatch for ordinary operations;
-// decision requests are immutable and must never be rewritten on retry.
-const queues = new Map<string, Promise<unknown>>();
+// Only operations already queued in this client may advance a captured version.
+// Never replace a caller's version with an arbitrary server read.
+type QueuedMutation = { inputVersion?: number; resultVersion?: number; promise: Promise<unknown> };
+const queues = new Map<string, QueuedMutation[]>();
 function request<T>(url: string, options: RequestInit = {}): Promise<T> {
   const match = url.match(/^\/api\/trials\/([^/]+)\/([^/]+)$/);
   if (!match || options.method !== 'POST') return rawRequest<T>(url, options);
   const [, id, operation] = match;
-  const task = (queues.get(id) || Promise.resolve()).catch(() => {}).then(async () => {
-    if (operation !== 'decision' && operation !== 'next') {
-      const fresh = await rawRequest<ParticipantTrialView>(`/api/trials/${id}`, { headers: options.headers });
-      if ((operation === 'pause' && fresh.status === 'paused') ||
-          (operation === 'resume' && fresh.status === 'active') ||
-          (operation === 'open-decision' && fresh.status === 'decision_open') ||
-          (operation === 'checkpoint' && fresh.status !== 'active')) return fresh as T;
-      const body = JSON.parse(options.body as string);
-      body.state_version = fresh.state_version;
-      if ('active_play_ms' in body) body.active_play_ms = fresh.status === 'active'
-        ? Math.max(body.active_play_ms, fresh.active_play_ms) : fresh.active_play_ms;
-      options = { ...options, body: JSON.stringify(body) };
+  const predecessors = [...(queues.get(id) || [])];
+  const body = JSON.parse(options.body as string);
+  const entry: QueuedMutation = { inputVersion: body.state_version, promise: Promise.resolve() };
+  const task = (async () => {
+    let version = body.state_version;
+    for (const previous of predecessors) {
+      // A failed/uncertain predecessor cannot authorize rebasing a later command.
+      await previous.promise;
+      if (operation !== 'decision' && previous.inputVersion === version && previous.resultVersion !== undefined) {
+        version = previous.resultVersion;
+      }
     }
-    return rawRequest<T>(url, options);
-  });
-  queues.set(id, task);
+    entry.inputVersion = version;
+    if (version !== undefined) body.state_version = version;
+    try {
+      const result = await rawRequest<T>(url, { ...options, body: JSON.stringify(body) });
+      entry.resultVersion = (result as { state_version?: number }).state_version;
+      return result;
+    } catch (err) {
+      if (err instanceof ApiError && err.isStateVersionConflict && typeof window !== 'undefined') {
+        const fresh = await rawRequest<ParticipantTrialView>(`/api/trials/${id}`, { headers: options.headers });
+        window.dispatchEvent(new CustomEvent('preference-lab-conflict', { detail: fresh }));
+      }
+      throw err;
+    }
+  })();
+  entry.promise = task;
+  queues.set(id, [...predecessors, entry]);
+  void task.finally(() => {
+    const remaining = (queues.get(id) || []).filter(item => item !== entry);
+    if (remaining.length) queues.set(id, remaining); else queues.delete(id);
+  }).catch(() => {});
   return task;
 }
 
@@ -81,13 +98,16 @@ const pendingStorage = typeof localStorage === 'undefined' ? {
 } : localStorage;
 
 export type DecisionPayload = Parameters<typeof api.commitDecision>[1];
+export function notifyPendingChanged() {
+  if (typeof window !== 'undefined') window.dispatchEvent(new Event('preference-lab-pending'));
+}
 export const pendingKey = (id: string) => `preference_lab_pending_${id}`;
 
 export const api = {
-  async checkpoint(trialId: string, activePlayMs: number, sessionToken: string) {
+  async checkpoint(trialId: string, activePlayMs: number, stateVersion: number, sessionToken: string) {
     return request<Pick<ParticipantTrialView, 'status' | 'state_version' | 'public_state' | 'active_play_ms'>>(
       `/api/trials/${trialId}/checkpoint`, { method: 'POST', headers: { 'X-Session-Token': sessionToken },
-        body: JSON.stringify({ active_play_ms: activePlayMs, state_version: 0 }) });
+        body: JSON.stringify({ active_play_ms: activePlayMs, state_version: stateVersion }) });
   },
   // Participant endpoints
   async joinSession(sessionCode: string): Promise<JoinSessionResponse> {
@@ -187,6 +207,7 @@ export const api = {
     const saved = pendingStorage.getItem(key);
     const frozen = saved ? JSON.parse(saved) : payload;
     pendingStorage.setItem(key, JSON.stringify(frozen));
+    notifyPendingChanged();
     let result: CommitDecisionResponse;
     try { result = await request<CommitDecisionResponse>(`/api/trials/${trialId}/decision`, {
       method: 'POST',
@@ -195,10 +216,14 @@ export const api = {
     }); } catch (err) {
       // A version rejection is definitive: nothing was committed. A subsequent
       // confirmation is a new request; transport failures keep the frozen request.
-      if (err instanceof ApiError && err.isStateVersionConflict) pendingStorage.removeItem(key);
+      if (err instanceof ApiError && err.isStateVersionConflict) {
+        pendingStorage.removeItem(key);
+        notifyPendingChanged();
+      }
       throw err;
     }
     pendingStorage.removeItem(key);
+    notifyPendingChanged();
     return result;
   },
 
