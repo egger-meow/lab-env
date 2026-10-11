@@ -8,7 +8,13 @@
   "language": "zh-TW",
   "public_stimulus": {
     "num_positions": 5,
-    "items": ["water", "light", "fire", "wind", "earth"],
+    "items": [
+      "water",
+      "light",
+      "fire",
+      "wind",
+      "earth"
+    ],
     "item_labels": {
       "water": "流水",
       "light": "光芒",
@@ -80,10 +86,22 @@
       "params": {}
     }
   ],
-  "author_status": "engine_validated",
+  "author_status": "drafted",
   "private_data": {
-    "expected_solution": ["water", "light", "fire", "wind", "earth"],
-    "hint_text": "火焰固定在中心第 3 格，而流水與光芒相鄰且都在火焰左側，請注意微風只能放在第 4 格。",
-    "source_clue_ids": ["c1", "c2", "c3", "c4", "c5"]
+    "expected_solution": [
+      "water",
+      "light",
+      "fire",
+      "wind",
+      "earth"
+    ],
+    "hint_text": "火焰位於中心第 3 格，請關注流水與光芒的相鄰線索及其相對於火焰的位置，並結合泥土的固定線索進行排除推導。",
+    "source_clue_ids": [
+      "c1",
+      "c2",
+      "c3",
+      "c4",
+      "c5"
+    ]
   }
 }

@@ -8,7 +8,12 @@
   "language": "zh-TW",
   "public_stimulus": {
     "num_positions": 4,
-    "items": ["sun", "cloud", "bird", "tree"],
+    "items": [
+      "sun",
+      "cloud",
+      "bird",
+      "tree"
+    ],
     "item_labels": {
       "sun": "太陽",
       "cloud": "雲朵",
@@ -72,10 +77,20 @@
       "params": {}
     }
   ],
-  "author_status": "engine_validated",
+  "author_status": "drafted",
   "private_data": {
-    "expected_solution": ["sun", "tree", "bird", "cloud"],
-    "hint_text": "太陽已佔據第 1 格，大樹與飛鳥必須相鄰且飛鳥不在末尾，請推導大樹的位置。",
-    "source_clue_ids": ["c1", "c2", "c3", "c4"]
+    "expected_solution": [
+      "sun",
+      "tree",
+      "bird",
+      "cloud"
+    ],
+    "hint_text": "太陽位置已由線索確定，請注意大樹與飛鳥的相鄰與先後順序，結合末格排除條件進行推導。",
+    "source_clue_ids": [
+      "c1",
+      "c2",
+      "c3",
+      "c4"
+    ]
   }
 }

@@ -23,7 +23,7 @@ class Instrument(BaseModel):
     language: str = "zh-TW"
     public_stimulus: dict[str, Any]
     action_specs: list[ActionSpec]
-    author_status: Literal["drafted", "engine_validated", "human_reviewed"] = "engine_validated"
+    author_status: Literal["drafted", "engine_validated", "human_reviewed"] = "drafted"
     private_data: dict[str, Any] = Field(default_factory=dict)
 
 

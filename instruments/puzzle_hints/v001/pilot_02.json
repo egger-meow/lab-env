@@ -8,7 +8,13 @@
   "language": "zh-TW",
   "public_stimulus": {
     "num_positions": 5,
-    "items": ["apple", "book", "cup", "drum", "bell"],
+    "items": [
+      "apple",
+      "book",
+      "cup",
+      "drum",
+      "bell"
+    ],
     "item_labels": {
       "apple": "蘋果",
       "book": "書籍",
@@ -80,10 +86,22 @@
       "params": {}
     }
   ],
-  "author_status": "engine_validated",
+  "author_status": "drafted",
   "private_data": {
-    "expected_solution": ["apple", "drum", "bell", "cup", "book"],
-    "hint_text": "兩端已固定為蘋果與書籍，中間第 2、3、4 格由鼓聲、鈴鐺、水杯構成相鄰排列。",
-    "source_clue_ids": ["c1", "c2", "c3", "c4", "c5"]
+    "expected_solution": [
+      "apple",
+      "drum",
+      "bell",
+      "cup",
+      "book"
+    ],
+    "hint_text": "兩端圖案已由明確線索鎖定，請關注鼓聲、鈴鐺與水杯之間的連續相鄰與先後順序。",
+    "source_clue_ids": [
+      "c1",
+      "c2",
+      "c3",
+      "c4",
+      "c5"
+    ]
   }
 }

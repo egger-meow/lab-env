@@ -8,7 +8,14 @@
   "language": "zh-TW",
   "public_stimulus": {
     "num_positions": 6,
-    "items": ["cat", "dog", "fish", "frog", "fox", "deer"],
+    "items": [
+      "cat",
+      "dog",
+      "fish",
+      "frog",
+      "fox",
+      "deer"
+    ],
     "item_labels": {
       "cat": "貓咪",
       "dog": "狗狗",
@@ -88,10 +95,22 @@
       "params": {}
     }
   ],
-  "author_status": "engine_validated",
+  "author_status": "drafted",
   "private_data": {
-    "expected_solution": ["cat", "dog", "fish", "frog", "fox", "deer"],
-    "hint_text": "貓咪在第 1 格且與狗狗相鄰，因此狗狗在第 2 格；鹿在第 6 格且與狐狸相鄰，因此狐狸在第 5 格。",
-    "source_clue_ids": ["c1", "c2", "c3", "c6"]
+    "expected_solution": [
+      "cat",
+      "dog",
+      "fish",
+      "frog",
+      "fox",
+      "deer"
+    ],
+    "hint_text": "貓咪與鹿分別鎖定棋盤兩端，請由兩端相鄰動物的線索逐步向內部推進，並注意游魚與青蛙的先後關係。",
+    "source_clue_ids": [
+      "c1",
+      "c2",
+      "c3",
+      "c6"
+    ]
   }
 }

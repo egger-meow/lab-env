@@ -8,7 +8,12 @@
   "language": "zh-TW",
   "public_stimulus": {
     "num_positions": 4,
-    "items": ["moon", "key", "star", "leaf"],
+    "items": [
+      "moon",
+      "key",
+      "star",
+      "leaf"
+    ],
     "item_labels": {
       "moon": "月亮",
       "key": "鑰匙",
@@ -72,10 +77,19 @@
       "params": {}
     }
   ],
-  "author_status": "engine_validated",
+  "author_status": "drafted",
   "private_data": {
-    "expected_solution": ["moon", "key", "star", "leaf"],
+    "expected_solution": [
+      "moon",
+      "key",
+      "star",
+      "leaf"
+    ],
     "hint_text": "注意葉子已鎖定在第 4 格，且鑰匙不在第 1 格，請思考鑰匙與月亮的相對位置。",
-    "source_clue_ids": ["c3", "c4", "c2"]
+    "source_clue_ids": [
+      "c3",
+      "c4",
+      "c2"
+    ]
   }
 }

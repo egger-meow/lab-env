@@ -38,29 +38,69 @@
       "action_id": "collect_0",
       "label": "收集 0 個箱子",
       "description": "本輪取 0 箱，收益固定為 0",
-      "params": {"k": 0}
+      "params": {
+        "k": 0
+      }
     },
     {
       "action_id": "collect_3",
       "label": "收集 3 個箱子",
       "description": "取前 3 箱，命中率 30%，未命中收益 3 點",
-      "params": {"k": 3}
+      "params": {
+        "k": 3
+      }
     },
     {
       "action_id": "collect_5",
       "label": "收集 5 個箱子",
       "description": "取前 5 箱，命中率 50%，未命中收益 5 點",
-      "params": {"k": 5}
+      "params": {
+        "k": 5
+      }
     },
     {
       "action_id": "collect_8",
       "label": "收集 8 個箱子",
       "description": "取前 8 箱，命中率 80%，未命中收益 8 點",
-      "params": {"k": 8}
+      "params": {
+        "k": 8
+      }
     }
   ],
-  "author_status": "engine_validated",
+  "author_status": "drafted",
   "private_data": {
-    "is_tutorial": true
+    "is_tutorial": true,
+    "tutorial_type": "comprehension",
+    "comprehension_check": {
+      "num_boxes": 10,
+      "k": 3,
+      "reward_per_box": 1,
+      "questions": [
+        {
+          "question_id": "q1_hit_probability",
+          "prompt": "當總箱數為 10 且選取 3 箱時，命中炸彈的機率是多少？",
+          "options": [
+            "10%",
+            "30%",
+            "70%",
+            "100%"
+          ],
+          "correct_answer": "30%",
+          "explanation": "10 個箱子均勻藏有 1 顆炸彈，選取 3 箱的命中機率為 3/10 (30%)。"
+        },
+        {
+          "question_id": "q2_hit_payoff",
+          "prompt": "若不幸命中炸彈，本輪收益是多少點？",
+          "options": [
+            "0 點",
+            "3 點",
+            "7 點",
+            "扣 3 點"
+          ],
+          "correct_answer": "0 點",
+          "explanation": "依據規則，若炸彈在所選範圍內引爆，本輪收益為 0 點（不扣除既有本金）。"
+        }
+      ]
+    }
   }
 }

@@ -94,14 +94,41 @@ def test_bret_validation_errors():
     with pytest.raises(ValueError, match="reward_per_box must be >= 1"):
         validate_bret_params(100, -1, 20)
 
-    with pytest.raises(ValueError, match="k must be in range"):
+    with pytest.raises(ValueError, match="k must be >= 0"):
         validate_bret_params(100, 1, -5)
 
-    with pytest.raises(ValueError, match="k must be in range"):
+    with pytest.raises(ValueError, match="k must be <= 100"):
         validate_bret_params(100, 1, 101)
 
     with pytest.raises(ValueError, match="num_boxes must be >= 1"):
         validate_bret_params(0, 1, 0)
+
+    # Counterexamples from Review: Reject floats
+    with pytest.raises(TypeError, match="must be a strict integer"):
+        validate_bret_params(100, 1.5, 20)
+
+    with pytest.raises(TypeError, match="must be a strict integer"):
+        validate_bret_params(100, 1, 20.5)
+
+    # Counterexamples from Review: Reject booleans
+    with pytest.raises(TypeError, match="must be a strict integer"):
+        validate_bret_params(100, True, 20)
+
+    with pytest.raises(TypeError, match="must be a strict integer"):
+        validate_bret_params(True, 1, 20)
+
+    with pytest.raises(TypeError, match="must be a strict integer"):
+        validate_bret_params(100, 1, False)
+
+    # compute_bret_payoff rejects invalid/negative reward or bomb_index
+    with pytest.raises(ValueError, match="reward_per_box must be >= 1"):
+        compute_bret_payoff(bomb_index=21, k=20, reward_per_box=-1)
+
+    with pytest.raises(ValueError, match="bomb_index must be >= 1"):
+        compute_bret_payoff(bomb_index=0, k=20, reward_per_box=1)
+
+    with pytest.raises(ValueError, match="bomb_index must be <= 100"):
+        compute_bret_payoff(bomb_index=101, k=20, reward_per_box=1, num_boxes=100)
 
 
 def test_bret_bomb_sampling_determinism():

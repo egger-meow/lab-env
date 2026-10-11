@@ -38,28 +38,36 @@
       "action_id": "collect_0",
       "label": "收集 0 個箱子",
       "description": "本輪取 0 箱，不承擔風險，收益為 0",
-      "params": {"k": 0}
+      "params": {
+        "k": 0
+      }
     },
     {
       "action_id": "collect_10",
       "label": "收集 10 個箱子",
       "description": "取 10 箱，命中率 10%，未命中收益 10 點",
-      "params": {"k": 10}
+      "params": {
+        "k": 10
+      }
     },
     {
       "action_id": "collect_30",
       "label": "收集 30 個箱子",
       "description": "取 30 箱，命中率 30%，未命中收益 30 點",
-      "params": {"k": 30}
+      "params": {
+        "k": 30
+      }
     },
     {
       "action_id": "collect_50",
       "label": "收集 50 個箱子",
       "description": "取 50 箱，命中率 50%，未命中收益 50 點",
-      "params": {"k": 50}
+      "params": {
+        "k": 50
+      }
     }
   ],
-  "author_status": "engine_validated",
+  "author_status": "drafted",
   "private_data": {
     "is_tutorial": false
   }

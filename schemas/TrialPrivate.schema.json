@@ -1,0 +1,42 @@
+{
+  "properties": {
+    "trial_id": {
+      "title": "Trial Id",
+      "type": "string"
+    },
+    "bomb_index": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Bomb Index"
+    },
+    "random_seed": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Random Seed"
+    },
+    "internal_state": {
+      "additionalProperties": true,
+      "title": "Internal State",
+      "type": "object"
+    }
+  },
+  "required": [
+    "trial_id"
+  ],
+  "title": "TrialPrivate",
+  "type": "object"
+}

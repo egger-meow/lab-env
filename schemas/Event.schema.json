@@ -1,0 +1,54 @@
+{
+  "properties": {
+    "event_id": {
+      "title": "Event Id",
+      "type": "string"
+    },
+    "session_id": {
+      "title": "Session Id",
+      "type": "string"
+    },
+    "trial_id": {
+      "title": "Trial Id",
+      "type": "string"
+    },
+    "sequence_no": {
+      "title": "Sequence No",
+      "type": "integer"
+    },
+    "timestamp_utc": {
+      "title": "Timestamp Utc",
+      "type": "string"
+    },
+    "event_type": {
+      "title": "Event Type",
+      "type": "string"
+    },
+    "payload": {
+      "additionalProperties": true,
+      "title": "Payload",
+      "type": "object"
+    },
+    "state_version_before": {
+      "title": "State Version Before",
+      "type": "integer"
+    },
+    "state_version_after": {
+      "title": "State Version After",
+      "type": "integer"
+    }
+  },
+  "required": [
+    "event_id",
+    "session_id",
+    "trial_id",
+    "sequence_no",
+    "timestamp_utc",
+    "event_type",
+    "payload",
+    "state_version_before",
+    "state_version_after"
+  ],
+  "title": "Event",
+  "type": "object"
+}

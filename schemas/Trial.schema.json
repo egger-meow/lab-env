@@ -1,0 +1,96 @@
+{
+  "properties": {
+    "trial_id": {
+      "title": "Trial Id",
+      "type": "string"
+    },
+    "session_id": {
+      "title": "Session Id",
+      "type": "string"
+    },
+    "participant_id": {
+      "title": "Participant Id",
+      "type": "string"
+    },
+    "environment_id": {
+      "enum": [
+        "puzzle_hints",
+        "bret_discrete"
+      ],
+      "title": "Environment Id",
+      "type": "string"
+    },
+    "item_id": {
+      "title": "Item Id",
+      "type": "string"
+    },
+    "instrument_hash": {
+      "title": "Instrument Hash",
+      "type": "string"
+    },
+    "protocol_hash": {
+      "title": "Protocol Hash",
+      "type": "string"
+    },
+    "collection_index": {
+      "title": "Collection Index",
+      "type": "integer"
+    },
+    "status": {
+      "enum": [
+        "created",
+        "active",
+        "decision_open",
+        "decision_committed",
+        "executing",
+        "completed",
+        "completed_without_decision",
+        "skipped",
+        "aborted"
+      ],
+      "title": "Status",
+      "type": "string"
+    },
+    "state_version": {
+      "default": 1,
+      "title": "State Version",
+      "type": "integer"
+    },
+    "public_state": {
+      "additionalProperties": true,
+      "title": "Public State",
+      "type": "object"
+    },
+    "active_play_ms": {
+      "default": 0,
+      "title": "Active Play Ms",
+      "type": "integer"
+    },
+    "display_order": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Display Order",
+      "type": "array"
+    },
+    "created_at": {
+      "title": "Created At",
+      "type": "string"
+    }
+  },
+  "required": [
+    "trial_id",
+    "session_id",
+    "participant_id",
+    "environment_id",
+    "item_id",
+    "instrument_hash",
+    "protocol_hash",
+    "collection_index",
+    "status",
+    "public_state",
+    "created_at"
+  ],
+  "title": "Trial",
+  "type": "object"
+}

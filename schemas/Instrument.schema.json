@@ -1,0 +1,106 @@
+{
+  "$defs": {
+    "ActionSpec": {
+      "properties": {
+        "action_id": {
+          "title": "Action Id",
+          "type": "string"
+        },
+        "label": {
+          "title": "Label",
+          "type": "string"
+        },
+        "description": {
+          "title": "Description",
+          "type": "string"
+        },
+        "params": {
+          "additionalProperties": true,
+          "title": "Params",
+          "type": "object"
+        }
+      },
+      "required": [
+        "action_id",
+        "label",
+        "description"
+      ],
+      "title": "ActionSpec",
+      "type": "object"
+    }
+  },
+  "properties": {
+    "schema_version": {
+      "default": "v001",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "instrument_id": {
+      "title": "Instrument Id",
+      "type": "string"
+    },
+    "instrument_version": {
+      "title": "Instrument Version",
+      "type": "string"
+    },
+    "environment_id": {
+      "enum": [
+        "puzzle_hints",
+        "bret_discrete"
+      ],
+      "title": "Environment Id",
+      "type": "string"
+    },
+    "item_id": {
+      "title": "Item Id",
+      "type": "string"
+    },
+    "template_id": {
+      "title": "Template Id",
+      "type": "string"
+    },
+    "language": {
+      "default": "zh-TW",
+      "title": "Language",
+      "type": "string"
+    },
+    "public_stimulus": {
+      "additionalProperties": true,
+      "title": "Public Stimulus",
+      "type": "object"
+    },
+    "action_specs": {
+      "items": {
+        "$ref": "#/$defs/ActionSpec"
+      },
+      "title": "Action Specs",
+      "type": "array"
+    },
+    "author_status": {
+      "default": "drafted",
+      "enum": [
+        "drafted",
+        "engine_validated",
+        "human_reviewed"
+      ],
+      "title": "Author Status",
+      "type": "string"
+    },
+    "private_data": {
+      "additionalProperties": true,
+      "title": "Private Data",
+      "type": "object"
+    }
+  },
+  "required": [
+    "instrument_id",
+    "instrument_version",
+    "environment_id",
+    "item_id",
+    "template_id",
+    "public_stimulus",
+    "action_specs"
+  ],
+  "title": "Instrument",
+  "type": "object"
+}

@@ -28,17 +28,30 @@ class BretEvaluationResult(BaseModel):
     expected_payoff: float
 
 
+def _validate_strict_int(
+    val: Any,
+    name: str,
+    min_val: int | None = None,
+    max_val: int | None = None,
+) -> None:
+    """Validate that val is strictly an int (not bool, not float) and within bounds."""
+    if isinstance(val, bool) or not isinstance(val, int):
+        raise TypeError(f"{name} must be a strict integer, got {type(val).__name__} ({val})")
+    if min_val is not None and val < min_val:
+        raise ValueError(f"{name} must be >= {min_val}, got {val}")
+    if max_val is not None and val > max_val:
+        raise ValueError(f"{name} must be <= {max_val}, got {val}")
+
+
 def validate_bret_params(num_boxes: int, reward_per_box: int, k: int) -> None:
     """Validate BRET parameters strictly.
 
-    N >= 1, r >= 1, 0 <= k <= N.
+    N >= 1 (strict int), r >= 1 (strict int), 0 <= k <= N (strict int).
+    Note: k=0 and k=N are valid boundary values.
     """
-    if num_boxes < 1:
-        raise ValueError(f"num_boxes must be >= 1, got {num_boxes}")
-    if reward_per_box < 1:
-        raise ValueError(f"reward_per_box must be >= 1 (positive integer), got {reward_per_box}")
-    if k < 0 or k > num_boxes:
-        raise ValueError(f"k must be in range [0, {num_boxes}], got {k}")
+    _validate_strict_int(num_boxes, "num_boxes", min_val=1)
+    _validate_strict_int(reward_per_box, "reward_per_box", min_val=1)
+    _validate_strict_int(k, "k", min_val=0, max_val=num_boxes)
 
 
 def get_bret_action_stats(
@@ -63,21 +76,32 @@ def get_bret_action_stats(
     )
 
 
-def compute_bret_payoff(bomb_index: int, k: int, reward_per_box: int) -> tuple[int, bool]:
-    """Calculate payoff given bomb index b, collection k, and reward r.
+def compute_bret_payoff(
+    bomb_index: int,
+    k: int,
+    reward_per_box: int,
+    num_boxes: int | None = None,
+) -> tuple[int, bool]:
+    """Calculate payoff given bomb index b, collection k, reward r, and optional N.
 
     Rules:
-    - b in 1..N
+    - b in 1..N (strictly integer, >= 1, <= N if num_boxes provided)
+    - 0 <= k <= N (strictly integer)
+    - r >= 1 (strictly integer)
     - If b <= k: hit bomb! Payoff = 0
     - If b > k: safe! Payoff = r * k
 
     Returns:
     (payoff, is_bomb_hit)
     """
-    if k < 0:
-        raise ValueError(f"k cannot be negative, got {k}")
-    if bomb_index < 1:
-        raise ValueError(f"bomb_index must be >= 1, got {bomb_index}")
+    _validate_strict_int(reward_per_box, "reward_per_box", min_val=1)
+    _validate_strict_int(k, "k", min_val=0, max_val=num_boxes if num_boxes is not None else None)
+    _validate_strict_int(
+        bomb_index,
+        "bomb_index",
+        min_val=1,
+        max_val=num_boxes if num_boxes is not None else None,
+    )
 
     if bomb_index <= k:
         return 0, True

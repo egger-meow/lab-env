@@ -1,0 +1,40 @@
+{
+  "properties": {
+    "outcome_id": {
+      "title": "Outcome Id",
+      "type": "string"
+    },
+    "trial_id": {
+      "title": "Trial Id",
+      "type": "string"
+    },
+    "action_id": {
+      "title": "Action Id",
+      "type": "string"
+    },
+    "executed_payload": {
+      "additionalProperties": true,
+      "title": "Executed Payload",
+      "type": "object"
+    },
+    "result_summary": {
+      "additionalProperties": true,
+      "title": "Result Summary",
+      "type": "object"
+    },
+    "completed_at": {
+      "title": "Completed At",
+      "type": "string"
+    }
+  },
+  "required": [
+    "outcome_id",
+    "trial_id",
+    "action_id",
+    "executed_payload",
+    "result_summary",
+    "completed_at"
+  ],
+  "title": "Outcome",
+  "type": "object"
+}

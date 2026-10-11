@@ -38,29 +38,56 @@
       "action_id": "collect_0",
       "label": "收集 0 個箱子",
       "description": "本輪取 0 箱，不承擔任何風險，收益固定為 0",
-      "params": {"k": 0}
+      "params": {
+        "k": 0
+      }
     },
     {
       "action_id": "collect_2",
       "label": "收集 2 個箱子",
       "description": "取前 2 箱，命中率 20%，未命中收益 2 點",
-      "params": {"k": 2}
+      "params": {
+        "k": 2
+      }
     },
     {
       "action_id": "collect_4",
       "label": "收集 4 個箱子",
       "description": "取前 4 箱，命中率 40%，未命中收益 4 點",
-      "params": {"k": 4}
+      "params": {
+        "k": 4
+      }
     },
     {
       "action_id": "collect_6",
       "label": "收集 6 個箱子",
       "description": "取前 6 箱，命中率 60%，未命中收益 6 點",
-      "params": {"k": 6}
+      "params": {
+        "k": 6
+      }
     }
   ],
-  "author_status": "engine_validated",
+  "author_status": "drafted",
   "private_data": {
-    "is_tutorial": true
+    "is_tutorial": true,
+    "tutorial_type": "demonstration",
+    "fixed_demonstrations": [
+      {
+        "label": "安全未命中示範",
+        "k": 2,
+        "preset_bomb_index": 7,
+        "is_hit": false,
+        "payoff": 2,
+        "explanation": "預設示範（非隨機抽樣）：炸彈在第 7 格，選取 2 箱，炸彈在範圍外，獲得 2 點收益。"
+      },
+      {
+        "label": "命中引爆示範",
+        "k": 6,
+        "preset_bomb_index": 4,
+        "is_hit": true,
+        "payoff": 0,
+        "explanation": "預設示範（非隨機抽樣）：炸彈在第 4 格，選取 6 箱，炸彈在範圍內引爆，本輪收益為 0 點。"
+      }
+    ]
   }
 }

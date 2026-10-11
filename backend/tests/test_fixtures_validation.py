@@ -16,6 +16,7 @@ from preference_lab.domain.bret import (
     get_bret_action_stats,
     validate_bret_params,
 )
+from preference_lab.domain.validation import load_and_validate_instrument
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 
@@ -33,19 +34,19 @@ def test_puzzle_fixtures_integrity_and_uniqueness():
         with open(fpath, "r", encoding="utf-8") as f:
             raw_data = json.load(f)
 
-        # 1. Pydantic schema validation
-        instrument = Instrument.model_validate(raw_data)
-        assert instrument.environment_id == "puzzle_hints"
-        template_ids.add(instrument.template_id)
+        # 1. Pydantic schema validation & formal validation pipeline
+        instrument_draft = Instrument.model_validate(raw_data)
+        assert instrument_draft.author_status == "drafted"
+        assert instrument_draft.environment_id == "puzzle_hints"
+        template_ids.add(instrument_draft.template_id)
 
         # 2. Canonical hash must succeed
         h = sha256_canonical_json(raw_data)
         assert len(h) == 64
 
-        # 3. Domain validation (must have exactly one unique solution matching expected_solution)
-        stimulus = PuzzlePublicStimulus.model_validate(instrument.public_stimulus)
-        private_data = PuzzlePrivateData.model_validate(instrument.private_data)
-        validate_puzzle_stimulus(stimulus, private_data)
+        # 3. Formal loader validation upgrades drafted -> engine_validated
+        instrument_validated = load_and_validate_instrument(fpath)
+        assert instrument_validated.author_status == "engine_validated"
 
     # Spec Section 5.5: 至少 3 種線索結構 template_id
     assert len(template_ids) >= 3, f"Expected at least 3 template_ids, found {len(template_ids)}: {template_ids}"
@@ -62,16 +63,21 @@ def test_bret_fixtures_integrity_and_math():
         with open(fpath, "r", encoding="utf-8") as f:
             raw_data = json.load(f)
 
-        # 1. Pydantic schema validation
-        instrument = Instrument.model_validate(raw_data)
-        assert instrument.environment_id == "bret_discrete"
+        # 1. Pydantic schema validation & formal validation pipeline
+        instrument_draft = Instrument.model_validate(raw_data)
+        assert instrument_draft.author_status == "drafted"
+        assert instrument_draft.environment_id == "bret_discrete"
 
         # 2. Canonical hash
         h = sha256_canonical_json(raw_data)
         assert len(h) == 64
 
-        # 3. Stimulus & options validation
-        stimulus = BretPublicStimulus.model_validate(instrument.public_stimulus)
+        # 3. Formal loader validation upgrades drafted -> engine_validated
+        instrument_validated = load_and_validate_instrument(fpath)
+        assert instrument_validated.author_status == "engine_validated"
+
+        # 4. Stimulus & options validation
+        stimulus = BretPublicStimulus.model_validate(instrument_validated.public_stimulus)
         assert len(stimulus.options) == 4, "Every BRET round must have 4 action options"
 
         # Check options k values and ensure collect_0 is present

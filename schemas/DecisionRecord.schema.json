@@ -1,0 +1,104 @@
+{
+  "properties": {
+    "decision_id": {
+      "title": "Decision Id",
+      "type": "string"
+    },
+    "trial_id": {
+      "title": "Trial Id",
+      "type": "string"
+    },
+    "decision_index": {
+      "default": 1,
+      "title": "Decision Index",
+      "type": "integer"
+    },
+    "public_observation_snapshot": {
+      "additionalProperties": true,
+      "title": "Public Observation Snapshot",
+      "type": "object"
+    },
+    "observation_hash": {
+      "title": "Observation Hash",
+      "type": "string"
+    },
+    "acceptable_by_action": {
+      "additionalProperties": {
+        "enum": [
+          "yes",
+          "no",
+          "unsure"
+        ],
+        "type": "string"
+      },
+      "title": "Acceptable By Action",
+      "type": "object"
+    },
+    "selected_action_id": {
+      "title": "Selected Action Id",
+      "type": "string"
+    },
+    "preferred_action_ids": {
+      "anyOf": [
+        {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Preferred Action Ids"
+    },
+    "reason": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Reason"
+    },
+    "selection_acceptability_override": {
+      "default": false,
+      "title": "Selection Acceptability Override",
+      "type": "boolean"
+    },
+    "answered_at": {
+      "title": "Answered At",
+      "type": "string"
+    },
+    "deliberation_ms": {
+      "title": "Deliberation Ms",
+      "type": "integer"
+    },
+    "source": {
+      "default": "human_gui",
+      "enum": [
+        "human_gui",
+        "human_import",
+        "synthetic_mock"
+      ],
+      "title": "Source",
+      "type": "string"
+    }
+  },
+  "required": [
+    "decision_id",
+    "trial_id",
+    "public_observation_snapshot",
+    "observation_hash",
+    "acceptable_by_action",
+    "selected_action_id",
+    "answered_at",
+    "deliberation_ms"
+  ],
+  "title": "DecisionRecord",
+  "type": "object"
+}

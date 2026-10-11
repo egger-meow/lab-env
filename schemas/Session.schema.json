@@ -1,0 +1,79 @@
+{
+  "properties": {
+    "session_id": {
+      "title": "Session Id",
+      "type": "string"
+    },
+    "participant_id": {
+      "title": "Participant Id",
+      "type": "string"
+    },
+    "session_code": {
+      "title": "Session Code",
+      "type": "string"
+    },
+    "mode": {
+      "default": "pilot",
+      "enum": [
+        "practice",
+        "pilot",
+        "formal"
+      ],
+      "title": "Mode",
+      "type": "string"
+    },
+    "protocol_id": {
+      "title": "Protocol Id",
+      "type": "string"
+    },
+    "protocol_version": {
+      "title": "Protocol Version",
+      "type": "string"
+    },
+    "environment_order": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Environment Order",
+      "type": "array"
+    },
+    "status": {
+      "default": "created",
+      "enum": [
+        "created",
+        "active",
+        "completed",
+        "aborted"
+      ],
+      "title": "Status",
+      "type": "string"
+    },
+    "created_at": {
+      "title": "Created At",
+      "type": "string"
+    },
+    "completed_at": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Completed At"
+    }
+  },
+  "required": [
+    "session_id",
+    "participant_id",
+    "session_code",
+    "protocol_id",
+    "protocol_version",
+    "environment_order",
+    "created_at"
+  ],
+  "title": "Session",
+  "type": "object"
+}

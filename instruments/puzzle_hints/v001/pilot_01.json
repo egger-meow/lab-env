@@ -8,7 +8,12 @@
   "language": "zh-TW",
   "public_stimulus": {
     "num_positions": 4,
-    "items": ["gem", "crown", "sword", "shield"],
+    "items": [
+      "gem",
+      "crown",
+      "sword",
+      "shield"
+    ],
     "item_labels": {
       "gem": "寶石",
       "crown": "皇冠",
@@ -72,10 +77,19 @@
       "params": {}
     }
   ],
-  "author_status": "engine_validated",
+  "author_status": "drafted",
   "private_data": {
-    "expected_solution": ["shield", "gem", "crown", "sword"],
+    "expected_solution": [
+      "shield",
+      "gem",
+      "crown",
+      "sword"
+    ],
     "hint_text": "盾牌已確定在第 1 格，剩下的寶石、皇冠、寶劍滿足嚴格的順序鏈。",
-    "source_clue_ids": ["c1", "c2", "c3"]
+    "source_clue_ids": [
+      "c1",
+      "c2",
+      "c3"
+    ]
   }
 }
