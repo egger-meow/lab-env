@@ -270,9 +270,28 @@ class LabService:
         if trial.status not in ("active", "decision_open"):
             raise ValueError(f"Cannot update board on trial in status '{trial.status}'")
 
+        # Time validation: cannot be negative or decrease
+        if active_play_ms < 0:
+            raise ValueError("active_play_ms cannot be negative")
+        if active_play_ms < trial.active_play_ms:
+            raise ValueError(f"active_play_ms cannot decrease: current {trial.active_play_ms}, received {active_play_ms}")
+
         instrument = self.storage.get_instrument_by_hash(trial.instrument_hash) or self.storage.get_instrument(trial.item_id)
         if not instrument:
             raise ValueError(f"Instrument {trial.item_id} not found")
+
+        # Board validation: exact length and valid item IDs, no duplicates
+        num_pos = instrument.public_stimulus["num_positions"]
+        if len(board) != num_pos:
+            raise ValueError(f"Board length must be {num_pos}, got {len(board)}")
+
+        valid_items = set(instrument.public_stimulus["items"])
+        placed_items = [x for x in board if x is not None]
+        for item in placed_items:
+            if item not in valid_items:
+                raise ValueError(f"Invalid item '{item}' on board; valid items are: {sorted(valid_items)}")
+        if len(placed_items) != len(set(placed_items)):
+            raise ValueError(f"Duplicate items placed on board: {placed_items}")
 
         items = instrument.public_stimulus["items"]
         clues_raw = instrument.public_stimulus["clues"]
@@ -292,32 +311,15 @@ class LabService:
             has_decision = (self.storage.get_decision(trial_id) is not None)
             new_status = "completed" if has_decision else "completed_without_decision"
 
-        new_version = self.storage.update_trial_state(
+        events = [("board_changed", {"board": board, "is_solved": is_solved, "status_message": msg})]
+        new_version = self.storage.update_trial_state_atomic(
             trial_id=trial_id,
             public_state=public_state,
             status=new_status,
             active_play_ms=active_play_ms,
             expected_state_version=expected_state_version,
+            events=events,
         )
-
-        self.storage.add_event(
-            session_id=trial.session_id,
-            trial_id=trial_id,
-            event_type="board_changed",
-            payload={"board": board, "is_solved": is_solved, "status_message": msg},
-            state_version_before=expected_state_version,
-            state_version_after=new_version,
-        )
-
-        if is_solved:
-            self.storage.add_event(
-                session_id=trial.session_id,
-                trial_id=trial_id,
-                event_type="trial_ended",
-                payload={"status": new_status, "is_solved": True},
-                state_version_before=new_version,
-                state_version_after=new_version,
-            )
 
         return {
             "status": new_status,
@@ -340,25 +342,23 @@ class LabService:
         if trial.status != "active":
             raise ValueError(f"Trial status must be 'active' to open decision, got '{trial.status}'")
 
+        if active_play_ms < 0:
+            raise ValueError("active_play_ms cannot be negative")
+        if active_play_ms < trial.active_play_ms:
+            raise ValueError(f"active_play_ms cannot decrease: current {trial.active_play_ms}, received {active_play_ms}")
+
         instrument = self.storage.get_instrument_by_hash(trial.instrument_hash) or self.storage.get_instrument(trial.item_id)
         if instrument and instrument.private_data.get("is_tutorial", False):
             raise ValueError("Cannot open decision on tutorial trial. Tutorial trials require demonstration stepping or comprehension completion.")
 
-        new_version = self.storage.update_trial_state(
+        events = [("decision_opened", {"active_play_ms": active_play_ms})]
+        new_version = self.storage.update_trial_state_atomic(
             trial_id=trial_id,
             public_state=trial.public_state,
             status="decision_open",
             active_play_ms=active_play_ms,
             expected_state_version=expected_state_version,
-        )
-
-        self.storage.add_event(
-            session_id=trial.session_id,
-            trial_id=trial_id,
-            event_type="decision_opened",
-            payload={"active_play_ms": active_play_ms},
-            state_version_before=expected_state_version,
-            state_version_after=new_version,
+            events=events,
         )
 
         return {"status": "decision_open", "state_version": new_version}
@@ -370,11 +370,45 @@ class LabService:
         acceptable_by_action: dict[str, str],
         selected_action_id: str,
         deliberation_ms: int,
+        state_version: int,
         preferred_action_ids: list[str] | None = None,
         reason: str | None = None,
         selection_acceptability_override: bool = False,
     ) -> dict[str, Any]:
-        """Atomically commit participant decision and execute the corresponding action."""
+        """Atomically commit participant decision and execute the corresponding action.
+
+        Guards:
+        - Checks idempotency key and request payload hash BEFORE action consequence derivation.
+        - Verifies client-sent state_version against trial.state_version for new submissions.
+        - Forbids submission on tutorial trials.
+        - Enforces status == 'decision_open'.
+        """
+        request_payload_hash = sha256_canonical_json({
+            "trial_id": trial_id,
+            "acceptable_by_action": acceptable_by_action,
+            "selected_action_id": selected_action_id,
+            "preferred_action_ids": preferred_action_ids,
+            "deliberation_ms": deliberation_ms,
+            "selection_acceptability_override": selection_acceptability_override,
+            "reason": reason,
+        })
+
+        # 1. Check idempotency FIRST before any action deduction / state checking
+        existing = self.storage.get_decision_by_idempotency_key(idempotency_key)
+        if existing is not None:
+            existing_record, stored_payload_hash = existing
+            if stored_payload_hash != request_payload_hash:
+                raise ValueError("Idempotency key collision with different request payload")
+            current_trial = self.storage.get_trial(trial_id)
+            outcome = self.storage.get_outcome(trial_id)
+            return {
+                "idempotent": True,
+                "decision": existing_record.model_dump(),
+                "trial": current_trial.model_dump() if current_trial else None,
+                "outcome": outcome.model_dump() if outcome else None,
+            }
+
+        # 2. For new submissions, validate trial status, client state_version, and tutorial isolation
         trial = self.storage.get_trial(trial_id)
         if not trial:
             raise ValueError(f"Trial {trial_id} not found")
@@ -386,10 +420,11 @@ class LabService:
         if instrument.private_data.get("is_tutorial", False):
             raise ValueError("Cannot submit preference decision on tutorial trial. Tutorial trials require demonstration stepping or comprehension completion.")
 
-        # Require status to be decision_open unless this is an already-committed idempotent replay
-        existing_dec = self.storage.get_decision(trial_id)
-        if not existing_dec and trial.status != "decision_open":
+        if trial.status != "decision_open":
             raise ValueError(f"Cannot commit decision for trial in status '{trial.status}'; status must be 'decision_open'")
+
+        if state_version != trial.state_version:
+            raise ValueError(f"State version conflict: expected {state_version}, got {trial.state_version}")
 
         valid_action_ids = [spec.action_id for spec in instrument.action_specs]
 
@@ -523,16 +558,6 @@ class LabService:
                 "outcome": committed_outcome.model_dump() if committed_outcome else None,
             }
 
-        if new_status == "completed":
-            self.storage.add_event(
-                session_id=trial.session_id,
-                trial_id=trial_id,
-                event_type="trial_ended",
-                payload={"status": "completed", "outcome_summary": outcome_summary},
-                state_version_before=new_ver,
-                state_version_after=new_ver,
-            )
-
         return {
             "idempotent": False,
             "decision": committed_record.model_dump(),
@@ -571,20 +596,14 @@ class LabService:
         if next_idx < len(trials):
             next_t = trials[next_idx]
             if next_t.status == "created":
-                new_ver = self.storage.update_trial_state(
+                events = [("trial_started", {"collection_index": next_t.collection_index, "item_id": next_t.item_id})]
+                new_ver = self.storage.update_trial_state_atomic(
                     trial_id=next_t.trial_id,
                     public_state=next_t.public_state,
                     status="active",
                     active_play_ms=0,
                     expected_state_version=next_t.state_version,
-                )
-                self.storage.add_event(
-                    session_id=session_id,
-                    trial_id=next_t.trial_id,
-                    event_type="trial_started",
-                    payload={"collection_index": next_t.collection_index, "item_id": next_t.item_id},
-                    state_version_before=next_t.state_version,
-                    state_version_after=new_ver,
+                    events=events,
                 )
                 return {"has_next": True, "next_trial_id": next_t.trial_id}
             else:
@@ -611,22 +630,21 @@ class LabService:
         if trial.status not in ("active", "decision_open"):
             raise ValueError(f"Cannot pause trial in status '{trial.status}'")
 
+        if active_play_ms < 0:
+            raise ValueError("active_play_ms cannot be negative")
+        if active_play_ms < trial.active_play_ms:
+            raise ValueError(f"active_play_ms cannot decrease: current {trial.active_play_ms}, received {active_play_ms}")
+
         public_state = dict(trial.public_state)
         public_state["pre_pause_status"] = trial.status
-        new_ver = self.storage.update_trial_state(
+        events = [("trial_paused", {"active_play_ms": active_play_ms})]
+        new_ver = self.storage.update_trial_state_atomic(
             trial_id=trial_id,
             public_state=public_state,
             status="paused",
             active_play_ms=active_play_ms,
             expected_state_version=expected_state_version,
-        )
-        self.storage.add_event(
-            session_id=trial.session_id,
-            trial_id=trial_id,
-            event_type="trial_paused",
-            payload={"active_play_ms": active_play_ms},
-            state_version_before=expected_state_version,
-            state_version_after=new_ver,
+            events=events,
         )
         return {"status": "paused", "state_version": new_ver}
 
@@ -643,20 +661,14 @@ class LabService:
 
         public_state = dict(trial.public_state)
         target_status = public_state.pop("pre_pause_status", "active")
-        new_ver = self.storage.update_trial_state(
+        events = [("trial_resumed", {"resumed_to": target_status})]
+        new_ver = self.storage.update_trial_state_atomic(
             trial_id=trial_id,
             public_state=public_state,
             status=target_status,
             active_play_ms=trial.active_play_ms,
             expected_state_version=expected_state_version,
-        )
-        self.storage.add_event(
-            session_id=trial.session_id,
-            trial_id=trial_id,
-            event_type="trial_resumed",
-            payload={"resumed_to": target_status},
-            state_version_before=expected_state_version,
-            state_version_after=new_ver,
+            events=events,
         )
         return {"status": target_status, "state_version": new_ver}
 
@@ -673,20 +685,19 @@ class LabService:
         if trial.status in ("completed", "completed_without_decision", "skipped", "aborted"):
             raise ValueError(f"Trial already finished with status '{trial.status}'")
 
-        new_ver = self.storage.update_trial_state(
+        if active_play_ms < 0:
+            raise ValueError("active_play_ms cannot be negative")
+        if active_play_ms < trial.active_play_ms:
+            raise ValueError(f"active_play_ms cannot decrease: current {trial.active_play_ms}, received {active_play_ms}")
+
+        events = [("trial_skipped", {"reason": reason, "active_play_ms": active_play_ms})]
+        new_ver = self.storage.update_trial_state_atomic(
             trial_id=trial_id,
             public_state=trial.public_state,
             status="skipped",
             active_play_ms=active_play_ms,
             expected_state_version=expected_state_version,
-        )
-        self.storage.add_event(
-            session_id=trial.session_id,
-            trial_id=trial_id,
-            event_type="trial_skipped",
-            payload={"reason": reason, "active_play_ms": active_play_ms},
-            state_version_before=expected_state_version,
-            state_version_after=new_ver,
+            events=events,
         )
         return {"status": "skipped", "state_version": new_ver}
 
@@ -703,20 +714,19 @@ class LabService:
         if trial.status in ("completed", "completed_without_decision", "skipped", "aborted"):
             raise ValueError(f"Trial already finished with status '{trial.status}'")
 
-        new_ver = self.storage.update_trial_state(
+        if active_play_ms < 0:
+            raise ValueError("active_play_ms cannot be negative")
+        if active_play_ms < trial.active_play_ms:
+            raise ValueError(f"active_play_ms cannot decrease: current {trial.active_play_ms}, received {active_play_ms}")
+
+        events = [("trial_aborted", {"reason": reason, "active_play_ms": active_play_ms})]
+        new_ver = self.storage.update_trial_state_atomic(
             trial_id=trial_id,
             public_state=trial.public_state,
             status="aborted",
             active_play_ms=active_play_ms,
             expected_state_version=expected_state_version,
-        )
-        self.storage.add_event(
-            session_id=trial.session_id,
-            trial_id=trial_id,
-            event_type="trial_aborted",
-            payload={"reason": reason, "active_play_ms": active_play_ms},
-            state_version_before=expected_state_version,
-            state_version_after=new_ver,
+            events=events,
         )
         return {"status": "aborted", "state_version": new_ver}
 
@@ -729,6 +739,11 @@ class LabService:
         trial = self.storage.get_trial(trial_id)
         if not trial:
             raise ValueError(f"Trial {trial_id} not found")
+
+        # Demonstration can ONLY be stepped on active trial
+        if trial.status != "active":
+            raise ValueError(f"Demonstration can only be stepped when trial status is 'active', got '{trial.status}'")
+
         instrument = self.storage.get_instrument_by_hash(trial.instrument_hash) or self.storage.get_instrument(trial.item_id)
         if not instrument:
             raise ValueError("Instrument not found")
@@ -741,30 +756,29 @@ class LabService:
         if step_index < 0 or step_index >= len(demos):
             raise ValueError(f"Invalid demo step index {step_index}; total: {len(demos)}")
 
+        # Enforce sequential stepping: cannot skip ahead
+        current_step = trial.public_state.get("current_demonstration_index", 0)
+        if step_index != current_step:
+            raise ValueError(f"Demonstration must be stepped in sequential order: expected step_index {current_step}, got {step_index}")
+
         demo = demos[step_index]
         public_state = dict(trial.public_state)
         public_state["current_demonstration"] = demo
-        public_state["current_demonstration_index"] = step_index
+        public_state["current_demonstration_index"] = step_index + 1
 
         is_final = (step_index + 1 >= len(demos))
         new_status = "completed" if is_final else trial.status
         if is_final:
             public_state["demonstrations_completed"] = True
 
-        new_ver = self.storage.update_trial_state(
+        events = [("demonstration_stepped", {"step_index": step_index, "is_final": is_final, "demo": demo})]
+        new_ver = self.storage.update_trial_state_atomic(
             trial_id=trial_id,
             public_state=public_state,
             status=new_status,
             active_play_ms=trial.active_play_ms,
             expected_state_version=expected_state_version,
-        )
-        self.storage.add_event(
-            session_id=trial.session_id,
-            trial_id=trial_id,
-            event_type="demonstration_stepped",
-            payload={"step_index": step_index, "is_final": is_final, "demo": demo},
-            state_version_before=expected_state_version,
-            state_version_after=new_ver,
+            events=events,
         )
         return {
             "status": new_status,
@@ -784,6 +798,14 @@ class LabService:
         trial = self.storage.get_trial(trial_id)
         if not trial:
             raise ValueError(f"Trial {trial_id} not found")
+
+        # Comprehension can ONLY be submitted on active trial
+        if trial.status != "active":
+            raise ValueError(f"Comprehension can only be submitted when trial status is 'active', got '{trial.status}'")
+
+        if deliberation_ms < 0:
+            raise ValueError("deliberation_ms cannot be negative")
+
         instrument = self.storage.get_instrument_by_hash(trial.instrument_hash) or self.storage.get_instrument(trial.item_id)
         if not instrument:
             raise ValueError("Instrument not found")
@@ -820,20 +842,14 @@ class LabService:
         public_state["comprehension_completed"] = all_correct
 
         new_status = "completed" if all_correct else trial.status
-        new_ver = self.storage.update_trial_state(
+        events = [("comprehension_submitted", {"all_correct": all_correct, "deliberation_ms": deliberation_ms, "feedback": feedback})]
+        new_ver = self.storage.update_trial_state_atomic(
             trial_id=trial_id,
             public_state=public_state,
             status=new_status,
             active_play_ms=trial.active_play_ms,
             expected_state_version=expected_state_version,
-        )
-        self.storage.add_event(
-            session_id=trial.session_id,
-            trial_id=trial_id,
-            event_type="comprehension_submitted",
-            payload={"all_correct": all_correct, "deliberation_ms": deliberation_ms, "feedback": feedback},
-            state_version_before=expected_state_version,
-            state_version_after=new_ver,
+            events=events,
         )
         return {
             "status": new_status,
@@ -855,20 +871,14 @@ class LabService:
 
         public_state = dict(trial.public_state)
         public_state["feedback"] = feedback
-        new_ver = self.storage.update_trial_state(
+        events = [("trial_feedback_submitted", feedback)]
+        new_ver = self.storage.update_trial_state_atomic(
             trial_id=trial_id,
             public_state=public_state,
             status=trial.status,
             active_play_ms=trial.active_play_ms,
             expected_state_version=expected_state_version,
-        )
-        self.storage.add_event(
-            session_id=trial.session_id,
-            trial_id=trial_id,
-            event_type="trial_feedback_submitted",
-            payload=feedback,
-            state_version_before=expected_state_version,
-            state_version_after=new_ver,
+            events=events,
         )
         return {"status": trial.status, "state_version": new_ver, "feedback": feedback}
 
@@ -891,20 +901,14 @@ class LabService:
         expected_sol = instrument.private_data.get("expected_solution")
         public_state = dict(trial.public_state)
         public_state["solution_revealed_followup"] = expected_sol
-        new_ver = self.storage.update_trial_state(
+        events = [("solution_revealed_followup", {"solution": expected_sol})]
+        new_ver = self.storage.update_trial_state_atomic(
             trial_id=trial_id,
             public_state=public_state,
             status=trial.status,
             active_play_ms=trial.active_play_ms,
             expected_state_version=expected_state_version,
-        )
-        self.storage.add_event(
-            session_id=trial.session_id,
-            trial_id=trial_id,
-            event_type="solution_revealed_followup",
-            payload={"solution": expected_sol},
-            state_version_before=expected_state_version,
-            state_version_after=new_ver,
+            events=events,
         )
         return {
             "status": trial.status,

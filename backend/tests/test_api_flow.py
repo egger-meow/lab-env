@@ -196,10 +196,12 @@ def test_decision_state_guards_and_atomic_execution(client):
     assert open_res.json()["status"] == "decision_open"
 
     # 3. Submitting decision now succeeds
+    valid_dec_payload = dict(decision_payload)
+    valid_dec_payload["state_version"] = open_res.json()["state_version"]
     dec_res = client.post(
         f"/api/trials/{trial_id}/decision",
         headers=headers,
-        json=decision_payload,
+        json=valid_dec_payload,
     )
     assert dec_res.status_code == 200
     dec_data = dec_res.json()
@@ -305,7 +307,7 @@ def test_next_trial_guards_and_idempotency(client):
     res_b2 = client.post(
         f"/api/trials/{trial_2_id}/board",
         headers=headers,
-        json={"board": ["moon", None, None, None], "active_play_ms": 12345, "state_version": t2_view_before["state_version"]},
+        json={"board": ["sun", None, None, None], "active_play_ms": 12345, "state_version": t2_view_before["state_version"]},
     )
     assert res_b2.status_code == 200
 
@@ -482,3 +484,349 @@ def test_operator_export_session_zip(client):
         namelist = zf.namelist()
         for f in ["manifest.json", "instruments.json", "decisions.json", "events.jsonl", "outcomes.json", "private_replay.json"]:
             assert f in namelist
+
+
+def test_next_step_idempotent_replay_after_board_completed(client):
+    """P1 counterexample: next_step completes board; resending original key & payload must return original outcome without error."""
+    op_res = client.post(
+        "/api/operator/sessions",
+        headers={"X-Operator-Token": OPERATOR_TOKEN},
+        json={"mode": "pilot", "environment_order": ["puzzle_hints"]},
+    )
+    session_code = op_res.json()["session"]["session_code"]
+    trial_id = op_res.json()["first_trial_id"]
+
+    join_res = client.post("/api/sessions/join", json={"session_code": session_code})
+    headers = {"X-Session-Token": join_res.json()["session_token"]}
+
+    # Practice 01 solution: ["moon", "key", "star", "leaf"]
+    # Pre-fill 3 items so next_step fills the 4th item and solves the board!
+    b_res = client.post(
+        f"/api/trials/{trial_id}/board",
+        headers=headers,
+        json={"board": ["moon", "key", "star", None], "active_play_ms": 2000, "state_version": 1},
+    )
+    assert b_res.status_code == 200
+
+    # Open decision
+    open_res = client.post(
+        f"/api/trials/{trial_id}/open-decision",
+        headers=headers,
+        json={"active_play_ms": 2500, "state_version": b_res.json()["state_version"]},
+    )
+    assert open_res.status_code == 200
+
+    payload = {
+        "idempotency_key": "next_step_solve_key_1",
+        "acceptable_by_action": {"continue": "yes", "hint": "yes", "next_step": "yes", "solution": "yes"},
+        "selected_action_id": "next_step",
+        "deliberation_ms": 1500,
+        "state_version": open_res.json()["state_version"],
+        "reason": "need last item",
+    }
+
+    # 1. Commit next_step
+    dec1 = client.post(f"/api/trials/{trial_id}/decision", headers=headers, json=payload)
+    assert dec1.status_code == 200
+    assert dec1.json()["idempotent"] is False
+    assert dec1.json()["public_state"]["board"] == ["moon", "key", "star", "leaf"]
+
+    # 2. Resend original key & payload: board is already full/solved, but must return idempotent=True without crashing!
+    dec2 = client.post(f"/api/trials/{trial_id}/decision", headers=headers, json=payload)
+    assert dec2.status_code == 200
+    assert dec2.json()["idempotent"] is True
+    assert dec2.json()["decision"]["decision_id"] == dec1.json()["decision"]["decision_id"]
+
+
+def test_session_rejoin_positioning_paused_and_completed_states(client):
+    """P1 counterexample: paused trial or finished trial before next must correctly position on rejoin."""
+    op_res = client.post(
+        "/api/operator/sessions",
+        headers={"X-Operator-Token": OPERATOR_TOKEN},
+        json={"mode": "pilot", "environment_order": ["puzzle_hints"]},
+    )
+    session_id = op_res.json()["session"]["session_id"]
+    session_code = op_res.json()["session"]["session_code"]
+    trial_1_id = op_res.json()["first_trial_id"]
+
+    join_res = client.post("/api/sessions/join", json={"session_code": session_code})
+    headers = {"X-Session-Token": join_res.json()["session_token"]}
+
+    # Complete trial 1
+    client.post(
+        f"/api/trials/{trial_1_id}/skip",
+        headers=headers,
+        json={"reason": "skip t1", "active_play_ms": 1000, "state_version": 1},
+    )
+    next_res = client.post(
+        f"/api/trials/{trial_1_id}/next",
+        headers=headers,
+        json={"session_id": session_id},
+    )
+    trial_2_id = next_res.json()["next_trial_id"]
+
+    # Pause trial 2
+    p_res = client.post(
+        f"/api/trials/{trial_2_id}/pause",
+        headers=headers,
+        json={"active_play_ms": 3000, "state_version": 2},
+    )
+    assert p_res.status_code == 200
+
+    # REJOIN: must locate trial 2 (the paused trial), NOT trial 1!
+    rejoin = client.post("/api/sessions/join", json={"session_code": session_code})
+    assert rejoin.status_code == 200
+    assert rejoin.json()["current_trial_id"] == trial_2_id
+
+    # Resume and skip trial 2
+    r_res = client.post(
+        f"/api/trials/{trial_2_id}/resume",
+        headers=headers,
+        json={"state_version": p_res.json()["state_version"]},
+    )
+    client.post(
+        f"/api/trials/{trial_2_id}/skip",
+        headers=headers,
+        json={"reason": "skip t2", "active_play_ms": 4000, "state_version": r_res.json()["state_version"]},
+    )
+
+    # Rejoin when trial 2 is completed but next hasn't been called yet -> locates trial 2
+    rejoin_t2_done = client.post("/api/sessions/join", json={"session_code": session_code})
+    assert rejoin_t2_done.status_code == 200
+    assert rejoin_t2_done.json()["current_trial_id"] == trial_2_id
+    assert rejoin_t2_done.json()["session_completed"] is False
+
+
+def test_tutorial_strict_status_and_sequential_stepping(client):
+    """P1 counterexample: demo & comprehension cannot execute on created/paused/future trials, nor skip steps."""
+    op_res = client.post(
+        "/api/operator/sessions",
+        headers={"X-Operator-Token": OPERATOR_TOKEN},
+        json={"mode": "pilot", "environment_order": ["bret_discrete"]},
+    )
+    session_id = op_res.json()["session"]["session_id"]
+    session_code = op_res.json()["session"]["session_code"]
+    tut1_id = op_res.json()["first_trial_id"]
+
+    join_res = client.post("/api/sessions/join", json={"session_code": session_code})
+    headers = {"X-Session-Token": join_res.json()["session_token"]}
+
+    # Future trial (tutorial_02, which is created, not active)
+    tut2_id = client.get(f"/api/operator/sessions/{session_id}", headers={"X-Operator-Token": OPERATOR_TOKEN}).json()["trials"][1]["trial_id"]
+
+    # 1. Attempting comprehension on created future trial -> 400!
+    res_future_comp = client.post(
+        f"/api/trials/{tut2_id}/comprehension",
+        headers=headers,
+        json={"answers": {"q1_hit_probability": "30%"}, "deliberation_ms": 1000, "state_version": 1},
+    )
+    assert res_future_comp.status_code == 400
+    assert "active" in res_future_comp.json()["detail"].lower()
+
+    # 2. Attempting demo on created future trial -> 400!
+    res_future_demo = client.post(
+        f"/api/trials/{tut2_id}/demonstration",
+        headers=headers,
+        json={"step_index": 0, "state_version": 1},
+    )
+    assert res_future_demo.status_code == 400
+    assert "active" in res_future_demo.json()["detail"].lower()
+
+    # 3. Attempting to skip step on current trial (tut1 has steps 0 then 1; submit step 1 first) -> 400!
+    res_skip_step = client.post(
+        f"/api/trials/{tut1_id}/demonstration",
+        headers=headers,
+        json={"step_index": 1, "state_version": 1},
+    )
+    assert res_skip_step.status_code == 400
+    assert "sequential order" in res_skip_step.json()["detail"].lower()
+
+
+def test_board_validation_and_monotonic_timer(client):
+    """P2 counterexample: invalid board items, duplicates, wrong length, negative time, and regressing time are rejected."""
+    op_res = client.post(
+        "/api/operator/sessions",
+        headers={"X-Operator-Token": OPERATOR_TOKEN},
+        json={"mode": "pilot", "environment_order": ["puzzle_hints"]},
+    )
+    session_code = op_res.json()["session"]["session_code"]
+    trial_id = op_res.json()["first_trial_id"]
+
+    join_res = client.post("/api/sessions/join", json={"session_code": session_code})
+    headers = {"X-Session-Token": join_res.json()["session_token"]}
+
+    # 1. Unknown item -> 400
+    res_unknown = client.post(
+        f"/api/trials/{trial_id}/board",
+        headers=headers,
+        json={"board": ["unknown", None, None, None], "active_play_ms": 1000, "state_version": 1},
+    )
+    assert res_unknown.status_code == 400
+    assert "Invalid item" in res_unknown.json()["detail"]
+
+    # 2. Duplicate items -> 400
+    res_dup = client.post(
+        f"/api/trials/{trial_id}/board",
+        headers=headers,
+        json={"board": ["moon", "moon", None, None], "active_play_ms": 1000, "state_version": 1},
+    )
+    assert res_dup.status_code == 400
+    assert "Duplicate items" in res_dup.json()["detail"]
+
+    # 3. Wrong board length -> 400
+    res_len = client.post(
+        f"/api/trials/{trial_id}/board",
+        headers=headers,
+        json={"board": ["moon", "key"], "active_play_ms": 1000, "state_version": 1},
+    )
+    assert res_len.status_code == 400
+    assert "Board length must be 4" in res_len.json()["detail"]
+
+    # 4. Negative play time -> 400
+    res_neg_time = client.post(
+        f"/api/trials/{trial_id}/board",
+        headers=headers,
+        json={"board": ["moon", None, None, None], "active_play_ms": -20, "state_version": 1},
+    )
+    assert res_neg_time.status_code == 400
+    assert "cannot be negative" in res_neg_time.json()["detail"]
+
+    # 5. Valid board with 5000ms
+    res_valid = client.post(
+        f"/api/trials/{trial_id}/board",
+        headers=headers,
+        json={"board": ["moon", None, None, None], "active_play_ms": 5000, "state_version": 1},
+    )
+    assert res_valid.status_code == 200
+
+    # 6. Regressing play time (submitting 3000ms when already 5000ms) -> 400!
+    res_regress = client.post(
+        f"/api/trials/{trial_id}/board",
+        headers=headers,
+        json={"board": ["moon", "key", None, None], "active_play_ms": 3000, "state_version": res_valid.json()["state_version"]},
+    )
+    assert res_regress.status_code == 400
+    assert "cannot decrease" in res_regress.json()["detail"]
+
+
+def test_stale_state_version_decision_rejection(client):
+    """P2 counterexample: submitting decision with stale state_version is rejected."""
+    op_res = client.post(
+        "/api/operator/sessions",
+        headers={"X-Operator-Token": OPERATOR_TOKEN},
+        json={"mode": "pilot", "environment_order": ["puzzle_hints"]},
+    )
+    session_code = op_res.json()["session"]["session_code"]
+    trial_id = op_res.json()["first_trial_id"]
+
+    join_res = client.post("/api/sessions/join", json={"session_code": session_code})
+    headers = {"X-Session-Token": join_res.json()["session_token"]}
+
+    # Open decision bumps state_version to 2
+    open_res = client.post(
+        f"/api/trials/{trial_id}/open-decision",
+        headers=headers,
+        json={"active_play_ms": 2000, "state_version": 1},
+    )
+    assert open_res.status_code == 200
+    assert open_res.json()["state_version"] == 2
+
+    # Submit decision with stale state_version=1 -> 400!
+    res_stale = client.post(
+        f"/api/trials/{trial_id}/decision",
+        headers=headers,
+        json={
+            "idempotency_key": "stale_test_key",
+            "acceptable_by_action": {"continue": "yes", "hint": "yes", "next_step": "yes", "solution": "yes"},
+            "selected_action_id": "hint",
+            "deliberation_ms": 1000,
+            "state_version": 1,  # STALE! Current is 2
+        },
+    )
+    assert res_stale.status_code == 400
+    assert "State version conflict" in res_stale.json()["detail"]
+
+
+def test_idempotency_reason_modification_detected_as_collision(client):
+    """Gap A: Same idempotency key with modified reason must be rejected as collision."""
+    op_res = client.post(
+        "/api/operator/sessions",
+        headers={"X-Operator-Token": OPERATOR_TOKEN},
+        json={"mode": "pilot", "environment_order": ["puzzle_hints"]},
+    )
+    session_code = op_res.json()["session"]["session_code"]
+    trial_id = op_res.json()["first_trial_id"]
+
+    join_res = client.post("/api/sessions/join", json={"session_code": session_code})
+    headers = {"X-Session-Token": join_res.json()["session_token"]}
+
+    open_res = client.post(
+        f"/api/trials/{trial_id}/open-decision",
+        headers=headers,
+        json={"active_play_ms": 2000, "state_version": 1},
+    )
+    cur_ver = open_res.json()["state_version"]
+
+    payload1 = {
+        "idempotency_key": "reason_collision_test_key",
+        "acceptable_by_action": {"continue": "yes", "hint": "yes", "next_step": "yes", "solution": "yes"},
+        "selected_action_id": "hint",
+        "deliberation_ms": 1500,
+        "state_version": cur_ver,
+        "reason": "Original reason",
+    }
+    res1 = client.post(f"/api/trials/{trial_id}/decision", headers=headers, json=payload1)
+    assert res1.status_code == 200
+
+    # Resend same key but with different reason -> 400!
+    payload2 = dict(payload1)
+    payload2["reason"] = "Tampered or modified reason"
+    res2 = client.post(f"/api/trials/{trial_id}/decision", headers=headers, json=payload2)
+    assert res2.status_code == 400
+    assert "Idempotency key collision" in res2.json()["detail"]
+
+
+def test_atomic_trial_ended_events_across_lifecycle(client):
+    """Gap B: trial_ended event is atomically recorded on skip, abort, demo completion, and puzzle solve."""
+    op_res = client.post(
+        "/api/operator/sessions",
+        headers={"X-Operator-Token": OPERATOR_TOKEN},
+        json={"mode": "pilot", "environment_order": ["puzzle_hints"]},
+    )
+    session_id = op_res.json()["session"]["session_id"]
+    session_code = op_res.json()["session"]["session_code"]
+    trial_id = op_res.json()["first_trial_id"]
+
+    join_res = client.post("/api/sessions/join", json={"session_code": session_code})
+    headers = {"X-Session-Token": join_res.json()["session_token"]}
+
+    # Skip trial
+    client.post(
+        f"/api/trials/{trial_id}/skip",
+        headers=headers,
+        json={"reason": "test skip", "active_play_ms": 2000, "state_version": 1},
+    )
+
+    # Inspect events recorded for session
+    sess_detail = client.get(
+        f"/api/operator/sessions/{session_id}",
+        headers={"X-Operator-Token": OPERATOR_TOKEN},
+    ).json()
+
+    # Verify export zip contains trial_ended in events.jsonl
+    zip_res = client.get(
+        f"/api/operator/sessions/{session_id}/export",
+        headers={"X-Operator-Token": OPERATOR_TOKEN},
+    )
+    with zipfile.ZipFile(io.BytesIO(zip_res.content)) as zf:
+        lines = zf.read("events.jsonl").decode("utf-8").strip().split("\n")
+        events = [json.loads(line) for line in lines]
+        event_types = [e["event_type"] for e in events]
+        assert "trial_skipped" in event_types
+        assert "trial_ended" in event_types
+
+        # Verify sequence_no strictly monotonic
+        seqs = [e["sequence_no"] for e in events]
+        assert seqs == sorted(seqs)
+        assert len(seqs) == len(set(seqs))
+

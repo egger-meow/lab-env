@@ -104,4 +104,25 @@
   - api: `v0.1.0`
 - **舊資料可比較性**：向前相容，修正可靠性漏洞與狀態機邊界。
 
+---
+
+## 2026-10-11: Part B 第二輪程式審查修正 (Review Fixes 2: Next Step Idempotency, Rejoin Positioning, Tutorial Sequence, Board/Timer Validation, State Version, Atomic Trial Ended)
+
+- **日期**：2026-10-11
+- **修改內容**：
+  1. `next_step` 冪等重送先於動作推導 (P1)：在任何動作推導或棋盤完成檢查前，優先檢查 `idempotency_key` 與比對請求 payload hash。合法冪等重送直接返回既有決策與結果，徹底解決棋盤已完成時重送報錯問題。
+  2. 暫停與終態 Rejoin 正確定位 (P1)：重新 `join_session` 時，當前題目定位依序尋找 `active`, `decision_open`, `paused`；若無進行中題目但有已完成題且尚未前進，停留在該題供使用者查閱與前進；全數完成時標記 `session_completed = True`。
+  3. 教學題嚴格狀態與依序步進 (P1)：示範題步進與理解確認操作嚴格要求試驗處於 `active` 狀態（拒絕 `created`, `paused` 及終態）；示範題必須依序執行步進 (`step_index == current_demonstration_index`)，禁止跳步或提前完成。
+  4. 棋盤長度與計時器單調非負驗證 (P2)：`/board` 提交嚴格驗證棋盤長度必須符合 `num_positions`、圖案必須屬於題目合法項目且無重複；所有涉及 `active_play_ms` 之端點強制檢驗非負數且不得倒退（單調遞增）。
+  5. 客戶端狀態版本校驗 (P2)：`CommitDecisionRequest` 接收客戶端畫面 `state_version`，首次提交時校驗與伺服器當前版本一致，防範使用者在過期舊畫面上作答；合法冪等重送則安全返回原決策。
+  6. 冪等請求 Hash 涵蓋 `reason` (Gap A)：計算 `request_payload_hash` 時將 `record.reason` 納入 Canonical Hash，偵測同 key 竄改 reason 的衝突情形。
+  7. 生命週期終態事件原子保存 (Gap B)：在 `commit_decision_atomic` 與 `update_trial_state_atomic` 中，將 `trial_ended` 事件與試驗狀態變更置於同一個 SQLite 交易內寫入，涵蓋決策完成、解謎完成、教學完成、理解確認、skip 與 abort，確保零殘留孤立紀錄。
+- **來源**：Human-origin（審查反例要求）+ AI-origin（工程實作與全覆蓋測試）
+- **影響版本**：
+  - schema: `v001`
+  - storage: `sqlite_v001`
+  - api: `v0.1.0`
+- **舊資料可比較性**：向前相容，全面固化真實受試者資料品質與操作可靠性。
+
+
 

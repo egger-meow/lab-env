@@ -107,6 +107,7 @@ class CommitDecisionRequest(BaseModel):
     acceptable_by_action: dict[str, str]
     selected_action_id: str
     deliberation_ms: int
+    state_version: int = 1
     preferred_action_ids: list[str] | None = None
     reason: str | None = None
     selection_acceptability_override: bool = False
@@ -188,15 +189,35 @@ def join_session(
         )
 
     trials = service.storage.get_trials_for_session(session.session_id)
-    active_trial = next((t for t in trials if t.status in ("active", "decision_open")), None)
-    if not active_trial and trials:
-        active_trial = trials[0]
+    active_trial = next((t for t in trials if t.status in ("active", "decision_open", "paused")), None)
+    session_completed = False
+    current_trial_id = None
+
+    if active_trial:
+        current_trial_id = active_trial.trial_id
+    elif trials:
+        terminal_statuses = ("completed", "completed_without_decision", "skipped", "aborted")
+        last_finished_idx = -1
+        for idx, t in enumerate(trials):
+            if t.status in terminal_statuses:
+                last_finished_idx = idx
+            elif t.status == "created":
+                break
+
+        if last_finished_idx >= 0 and last_finished_idx + 1 < len(trials):
+            current_trial_id = trials[last_finished_idx].trial_id
+        elif last_finished_idx == len(trials) - 1:
+            session_completed = True
+            current_trial_id = None
+        else:
+            current_trial_id = trials[0].trial_id
 
     return {
         "session": session.model_dump(),
         "session_token": session.session_token,
-        "current_trial_id": active_trial.trial_id if active_trial else None,
+        "current_trial_id": current_trial_id,
         "total_trials": len(trials),
+        "session_completed": session_completed,
     }
 
 
@@ -261,6 +282,7 @@ def commit_decision(
             acceptable_by_action=payload.acceptable_by_action,
             selected_action_id=payload.selected_action_id,
             deliberation_ms=payload.deliberation_ms,
+            state_version=payload.state_version,
             preferred_action_ids=payload.preferred_action_ids,
             reason=payload.reason,
             selection_acceptability_override=payload.selection_acceptability_override,

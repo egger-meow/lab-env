@@ -432,6 +432,81 @@ class Storage:
                 )
         return new_version
 
+    def update_trial_state_atomic(
+        self,
+        trial_id: str,
+        public_state: dict[str, Any],
+        status: str,
+        active_play_ms: int,
+        expected_state_version: int,
+        events: list[tuple[str, dict[str, Any]]],
+    ) -> int:
+        """Atomically update trial state, bump version, and record all events in one SQLite transaction."""
+        new_version = expected_state_version + 1
+        timestamp = get_utc_now_iso()
+
+        with self._get_connection() as conn:
+            cursor = conn.execute(
+                """
+                UPDATE trials
+                SET public_state = ?, status = ?, active_play_ms = ?, state_version = ?
+                WHERE trial_id = ? AND state_version = ?
+                """,
+                (
+                    json.dumps(public_state),
+                    status,
+                    active_play_ms,
+                    new_version,
+                    trial_id,
+                    expected_state_version,
+                ),
+            )
+            if cursor.rowcount == 0:
+                raise ValueError(
+                    f"State version conflict for trial {trial_id}: expected {expected_state_version}"
+                )
+
+            row_trial = conn.execute(
+                "SELECT session_id FROM trials WHERE trial_id = ?", (trial_id,)
+            ).fetchone()
+            if not row_trial:
+                raise ValueError(f"Trial {trial_id} not found")
+            session_id = row_trial["session_id"]
+
+            row_seq = conn.execute(
+                "SELECT COALESCE(MAX(sequence_no), 0) + 1 AS next_seq FROM events WHERE session_id = ?",
+                (session_id,),
+            ).fetchone()
+            seq_no = row_seq["next_seq"]
+
+            all_events = list(events)
+            terminal_statuses = ("completed", "completed_without_decision", "skipped", "aborted")
+            if status in terminal_statuses and not any(ev[0] == "trial_ended" for ev in all_events):
+                all_events.append(("trial_ended", {"status": status, "active_play_ms": active_play_ms}))
+
+            for ev_type, ev_payload in all_events:
+                ev_id = f"evt_{uuid.uuid4().hex[:12]}"
+                conn.execute(
+                    """
+                    INSERT INTO events (event_id, session_id, trial_id, sequence_no, timestamp_utc, event_type, payload, state_version_before, state_version_after)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        ev_id,
+                        session_id,
+                        trial_id,
+                        seq_no,
+                        timestamp,
+                        ev_type,
+                        json.dumps(ev_payload),
+                        expected_state_version,
+                        new_version,
+                    ),
+                )
+                seq_no += 1
+
+        return new_version
+
     def add_event(
         self,
         session_id: str,
@@ -496,6 +571,7 @@ class Storage:
             "preferred_action_ids": record.preferred_action_ids,
             "deliberation_ms": record.deliberation_ms,
             "selection_acceptability_override": record.selection_acceptability_override,
+            "reason": record.reason,
         })
         with self._get_connection() as conn:
             existing = conn.execute(
@@ -549,6 +625,43 @@ class Storage:
             )
             return record, True
 
+    def get_decision_by_idempotency_key(
+        self, idempotency_key: str
+    ) -> tuple[DecisionRecord, str] | None:
+        """Fetch decision by idempotency key along with stored request_payload_hash."""
+        with self._get_connection() as conn:
+            existing = conn.execute(
+                "SELECT * FROM decisions WHERE idempotency_key = ?", (idempotency_key,)
+            ).fetchone()
+            if not existing:
+                return None
+            return (
+                DecisionRecord(
+                    decision_id=existing["decision_id"],
+                    trial_id=existing["trial_id"],
+                    decision_index=existing["decision_index"],
+                    public_observation_snapshot=json.loads(
+                        existing["public_observation_snapshot"]
+                    ),
+                    observation_hash=existing["observation_hash"],
+                    acceptable_by_action=json.loads(existing["acceptable_by_action"]),
+                    selected_action_id=existing["selected_action_id"],
+                    preferred_action_ids=(
+                        json.loads(existing["preferred_action_ids"])
+                        if existing["preferred_action_ids"]
+                        else None
+                    ),
+                    reason=existing["reason"],
+                    selection_acceptability_override=bool(
+                        existing["selection_acceptability_override"]
+                    ),
+                    answered_at=existing["answered_at"],
+                    deliberation_ms=existing["deliberation_ms"],
+                    source=existing["source"],
+                ),
+                existing["request_payload_hash"],
+            )
+
     def commit_decision_atomic(
         self,
         record: DecisionRecord,
@@ -576,6 +689,7 @@ class Storage:
             "preferred_action_ids": record.preferred_action_ids,
             "deliberation_ms": record.deliberation_ms,
             "selection_acceptability_override": record.selection_acceptability_override,
+            "reason": record.reason,
         })
 
         with self._get_connection() as conn:
@@ -743,6 +857,32 @@ class Storage:
                     new_state_version,
                 ),
             )
+
+            # 7. Atomically insert trial_ended event if trial reached terminal status
+            terminal_statuses = ("completed", "completed_without_decision", "skipped", "aborted")
+            if new_status in terminal_statuses:
+                end_evt_id = f"evt_{uuid.uuid4().hex[:12]}"
+                seq_no += 1
+                conn.execute(
+                    """
+                    INSERT INTO events (event_id, session_id, trial_id, sequence_no, timestamp_utc, event_type, payload, state_version_before, state_version_after)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        end_evt_id,
+                        session_id,
+                        record.trial_id,
+                        seq_no,
+                        timestamp,
+                        "trial_ended",
+                        json.dumps({
+                            "status": new_status,
+                            "outcome_summary": outcome.result_summary,
+                        }),
+                        new_state_version,
+                        new_state_version,
+                    ),
+                )
 
         return record, True, new_state_version, outcome
 
