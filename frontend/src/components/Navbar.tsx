@@ -1,5 +1,6 @@
 import React from 'react';
-import { FlaskConical, Settings, User } from 'lucide-react';
+import { useTheme } from '../useTheme';
+import { FlaskConical, Settings, User, Moon, Sun } from 'lucide-react';
 
 interface NavbarProps {
   viewMode: 'participant' | 'operator';
@@ -16,6 +17,8 @@ export const Navbar: React.FC<NavbarProps> = ({
   participantId,
   onLeaveSession,
 }) => {
+  const { theme, toggleTheme } = useTheme();
+
   return (
     <header className="bg-white border-b border-slate-200 sticky top-0 z-30 shadow-sm">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
@@ -55,6 +58,16 @@ export const Navbar: React.FC<NavbarProps> = ({
               )}
             </div>
           )}
+
+          <button
+            type="button"
+            onClick={toggleTheme}
+            aria-label={theme === 'dark' ? '切換至淺色模式' : '切換至深色模式'}
+            title={theme === 'dark' ? '切換至淺色模式' : '切換至深色模式'}
+            className="shrink-0 rounded-lg border border-slate-200 bg-slate-100 p-2 text-slate-600 hover:text-slate-900 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-500"
+          >
+            {theme === 'dark' ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
+          </button>
 
           <div className="flex rounded-lg bg-slate-100 p-1 border border-slate-200">
             <button
