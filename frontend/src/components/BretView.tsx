@@ -20,6 +20,7 @@ interface BretViewProps {
   onPause: (activePlayMs: number) => Promise<void>;
   onSkip: (activePlayMs: number) => Promise<void>;
   hasNext: boolean;
+  navigating?: boolean;
 }
 
 export const BretView: React.FC<BretViewProps> = ({
@@ -30,6 +31,7 @@ export const BretView: React.FC<BretViewProps> = ({
   onSkip,
   onPause,
   hasNext,
+  navigating = false,
 }) => {
   const pending = usePendingDecision(trial.trial_id);
   const stimulus = trial.public_stimulus;
@@ -320,6 +322,7 @@ export const BretView: React.FC<BretViewProps> = ({
               <button
                 type="button"
                 onClick={onNextTrial}
+                disabled={navigating}
                 className="py-3 px-6 bg-sky-600 hover:bg-sky-700 text-white font-semibold rounded-xl shadow-md shadow-sky-200 transition-all flex items-center space-x-2"
               >
                 <span>{hasNext ? '進入下一題' : '完成試驗'}</span>
@@ -416,6 +419,7 @@ export const BretView: React.FC<BretViewProps> = ({
               <button
                 type="button"
                 onClick={onNextTrial}
+                disabled={navigating}
                 className="py-3 px-6 bg-sky-600 hover:bg-sky-700 text-white font-semibold rounded-xl shadow-md shadow-sky-200 transition-all flex items-center space-x-2"
               >
                 <span>{hasNext ? '前進先導題目' : '完成試驗'}</span>
@@ -657,6 +661,7 @@ export const BretView: React.FC<BretViewProps> = ({
               <button
                 type="button"
                 onClick={onNextTrial}
+                disabled={navigating}
                 className="py-3 px-6 bg-sky-600 hover:bg-sky-700 text-white font-semibold rounded-xl shadow-md shadow-sky-200 transition-all flex items-center space-x-2"
               >
                 <span>{hasNext ? '前進下一回合' : '完成全部試驗'}</span>

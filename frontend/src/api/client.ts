@@ -103,6 +103,10 @@ export function notifyPendingChanged() {
 }
 export const pendingKey = (id: string) => `preference_lab_pending_${id}`;
 
+// Browser blur and visibilitychange commonly fire together.
+const pendingPauses = new Map<string, Promise<{ status: string; state_version: number }>>();
+const settledPauseStatuses = new Set(['paused', 'skipped', 'completed', 'completed_without_decision', 'aborted']);
+
 export const api = {
   async checkpoint(trialId: string, activePlayMs: number, stateVersion: number, sessionToken: string) {
     return request<Pick<ParticipantTrialView, 'status' | 'state_version' | 'public_state' | 'active_play_ms'>>(
@@ -245,11 +249,31 @@ export const api = {
     stateVersion: number,
     sessionToken: string
   ): Promise<{ status: string; state_version: number }> {
-    return request(`/api/trials/${trialId}/pause`, {
-      method: 'POST',
-      headers: { 'X-Session-Token': sessionToken },
-      body: JSON.stringify({ active_play_ms: activePlayMs, state_version: stateVersion }),
-    });
+    const key = JSON.stringify([trialId, sessionToken]);
+    const pending = pendingPauses.get(key);
+    if (pending) return pending;
+    const task = (async () => {
+      try {
+        return await request<{ status: string; state_version: number }>(`/api/trials/${trialId}/pause`, {
+          method: 'POST',
+          headers: { 'X-Session-Token': sessionToken },
+          body: JSON.stringify({ active_play_ms: activePlayMs, state_version: stateVersion }),
+        });
+      } catch (err) {
+        // A skip, completion, or earlier pause may have won the race.
+        // Read authoritative state without retrying or changing the trial.
+        if (err instanceof ApiError && err.status === 400 && err.detail.startsWith('Cannot pause trial in status')) {
+          const fresh = await api.getTrial(trialId, sessionToken);
+          if (settledPauseStatuses.has(fresh.status)) {
+            return { status: fresh.status, state_version: fresh.state_version };
+          }
+        }
+        throw err;
+      }
+    })();
+    pendingPauses.set(key, task);
+    try { return await task; }
+    finally { if (pendingPauses.get(key) === task) pendingPauses.delete(key); }
   },
 
   async resumeTrial(

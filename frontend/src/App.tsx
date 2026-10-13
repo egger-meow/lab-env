@@ -103,8 +103,10 @@ export const App: React.FC = () => {
     localStorage.removeItem('preference_lab_session_token');
   };
 
+  const advancingRef = useRef(false);
   const handleNextTrial = async () => {
-    if (!currentTrial || !sessionInfo) return;
+    if (!currentTrial || !sessionInfo || advancingRef.current) return;
+    advancingRef.current = true;
     setLoading(true);
     try {
       const res = await api.nextTrial(
@@ -126,30 +128,31 @@ export const App: React.FC = () => {
         const fresh = await api.getTrial(currentTrial.trial_id, sessionToken);
         setCurrentTrial(fresh);
       } else {
-        alert(err.message || '無法切換至下一題');
+        showSyncToast(err.message || '無法切換至下一題');
       }
     } finally {
+      advancingRef.current = false;
       setLoading(false);
     }
   };
 
   const handlePause = async (activePlayMs: number) => {
-    if (!currentTrial) return;
+    if (!currentTrial || !['active', 'decision_open'].includes(currentTrial.status)) return;
+    const trialId = currentTrial.trial_id;
+    const syncTrial = async () => {
+      const fresh = await api.getTrial(trialId, sessionToken);
+      setCurrentTrial(previous => previous?.trial_id === trialId && fresh.state_version >= previous.state_version ? fresh : previous);
+    };
     try {
-      await api.pauseTrial(
-        currentTrial.trial_id,
-        activePlayMs,
-        currentTrial.state_version,
-        sessionToken
-      );
-      setCurrentTrial(await api.getTrial(currentTrial.trial_id, sessionToken));
+      await api.pauseTrial(trialId, activePlayMs, currentTrial.state_version, sessionToken);
+      await syncTrial();
     } catch (err: any) {
       if (err instanceof ApiError && err.isStateVersionConflict) {
-        showSyncToast('狀態已同步，請重試');
-        const fresh = await api.getTrial(currentTrial.trial_id, sessionToken);
-        setCurrentTrial(fresh);
+        try { await syncTrial(); }
+        catch { showSyncToast('暫時無法同步暫停狀態，請確認連線後重試。'); }
       } else {
-        alert(err.message);
+        // Native alerts cause another blur and can recursively request pause.
+        showSyncToast(err.message || '暫停失敗，請確認連線後重試。');
       }
     }
   };
@@ -166,7 +169,7 @@ export const App: React.FC = () => {
       const fresh = await api.getTrial(currentTrial.trial_id, sessionToken);
       setCurrentTrial(fresh);
     } catch (err: any) {
-      alert(err.message);
+      showSyncToast(err.message);
     } finally {
       setLoading(false);
     }
@@ -174,8 +177,8 @@ export const App: React.FC = () => {
 
   const handleSkip = async (activePlayMs: number) => {
     if (!currentTrial) return;
-    const confirmSkip = window.confirm('確定要跳過此題嗎？跳過後將無法返回本題。');
-    if (!confirmSkip) return;
+    if (loading) return;
+    setLoading(true);
 
     try {
       await api.skipTrial(
@@ -188,7 +191,9 @@ export const App: React.FC = () => {
       const fresh = await api.getTrial(currentTrial.trial_id, sessionToken);
       setCurrentTrial(fresh);
     } catch (err: any) {
-      alert(err.message);
+      showSyncToast(err.message);
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -196,6 +201,10 @@ export const App: React.FC = () => {
     setSyncToast(msg);
     setTimeout(() => setSyncToast(null), 3500);
   }
+
+  const updateCurrentTrial = (fresh: ParticipantTrialView) => {
+    setCurrentTrial(previous => previous?.trial_id === fresh.trial_id && fresh.state_version >= previous.state_version ? fresh : previous);
+  };
 
   return (
     <div className="min-h-screen bg-slate-50 flex flex-col font-sans text-slate-900">
@@ -283,7 +292,8 @@ export const App: React.FC = () => {
                 key={currentTrial.trial_id}
                 trial={currentTrial}
                 sessionToken={sessionToken}
-                onTrialUpdated={setCurrentTrial}
+                onTrialUpdated={updateCurrentTrial}
+                navigating={loading}
                 onNextTrial={handleNextTrial}
                 onPause={handlePause}
                 onSkip={handleSkip}
@@ -295,7 +305,8 @@ export const App: React.FC = () => {
                 key={currentTrial.trial_id}
                 trial={currentTrial}
                 sessionToken={sessionToken}
-                onTrialUpdated={setCurrentTrial}
+                onTrialUpdated={updateCurrentTrial}
+                navigating={loading}
                 onNextTrial={handleNextTrial}
                 onSkip={handleSkip}
                 hasNext={currentTrial.collection_index + 1 < totalTrials}

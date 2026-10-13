@@ -150,7 +150,7 @@ export const DecisionModal: React.FC<DecisionModalProps> = ({
           </div>
         )}
 
-        <button autoFocus disabled={loading || !!pending} type="button" onClick={onSkip} className="mt-2 px-3 py-1.5 border rounded-lg">無法決定，跳過此題</button>
+        <button disabled={loading || !!pending} type="button" onClick={onSkip} className="mt-2 px-3 py-1.5 border rounded-lg">無法決定，跳過此題</button>
         <form onSubmit={handleSubmit} className="mt-3 space-y-3">
           {pending && <p role="status" className="text-sm text-amber-800">提交結果尚未確認；下方顯示原回答並已鎖定。請重試原提交。</p>}
           <fieldset disabled={loading || !!pending} className="space-y-3">
@@ -265,7 +265,7 @@ export const DecisionModal: React.FC<DecisionModalProps> = ({
               ) : (
                 <>
                   <Check className="w-4 h-4" />
-                  <span>{pending ? '重試原提交' : '確認並執行此方案'}</span>
+                  <span>{pending ? '重試原提交' : '提交並執行方案'}</span>
                 </>
               )}
             </button>

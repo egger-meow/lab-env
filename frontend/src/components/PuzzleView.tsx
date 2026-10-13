@@ -21,6 +21,7 @@ interface PuzzleViewProps {
   onPause: (activePlayMs: number) => Promise<void>;
   onSkip: (activePlayMs: number) => Promise<void>;
   hasNext: boolean;
+  navigating?: boolean;
 }
 
 export const PuzzleView: React.FC<PuzzleViewProps> = ({
@@ -31,6 +32,7 @@ export const PuzzleView: React.FC<PuzzleViewProps> = ({
   onPause,
   onSkip,
   hasNext,
+  navigating = false,
 }) => {
   const stimulus = trial.public_stimulus;
   const orderedSpecs = [...trial.action_specs].sort((a, b) => trial.display_order.indexOf(a.action_id) - trial.display_order.indexOf(b.action_id));
@@ -81,6 +83,7 @@ export const PuzzleView: React.FC<PuzzleViewProps> = ({
   const trialRef = useRef(trial);
   trialRef.current = trial;
   const busyRef = useRef(false);
+  const boardSavingRef = useRef(false);
   const pauseRef = useRef(onPause);
   pauseRef.current = onPause;
   useEffect(() => {
@@ -135,7 +138,9 @@ export const PuzzleView: React.FC<PuzzleViewProps> = ({
 
   // Save board changes to backend
   const handleBoardSlotClick = async (idx: number) => {
-    if (trial.status !== 'active') return;
+    if (trial.status !== 'active' || loadingAction || boardSavingRef.current) return;
+    boardSavingRef.current = true;
+    setLoadingAction('board');
     setActionError(null);
 
     const newBoard = [...board];
@@ -178,11 +183,16 @@ export const PuzzleView: React.FC<PuzzleViewProps> = ({
       } else {
         setActionError(err.message || '保存棋盤失敗');
       }
+    } finally {
+      boardSavingRef.current = false;
+      setLoadingAction(null);
     }
   };
 
   const handleClearBoard = async () => {
-    if (trial.status !== 'active') return;
+    if (trial.status !== 'active' || loadingAction || boardSavingRef.current) return;
+    boardSavingRef.current = true;
+    setLoadingAction('board');
     const emptyBoard = Array(numPositions).fill(null);
     setBoard(emptyBoard);
     setSelectedInventoryItem(null);
@@ -204,11 +214,14 @@ export const PuzzleView: React.FC<PuzzleViewProps> = ({
       });
     } catch (err: any) {
       setActionError(err.message);
+    } finally {
+      boardSavingRef.current = false;
+      setLoadingAction(null);
     }
   };
 
   const handleCheckAnswer = async () => {
-    if (trial.status !== 'active') return;
+    if (trial.status !== 'active' || loadingAction || boardSavingRef.current) return;
     setLoadingAction('check');
     setActionError(null);
     const currentMs = Math.max(activePlayMs, trial.active_play_ms || 0);
@@ -243,7 +256,7 @@ export const PuzzleView: React.FC<PuzzleViewProps> = ({
   };
 
   const handleOpenDecision = async () => {
-    if (trial.status !== 'active' || trial.public_state.primary_decision_committed) return;
+    if (trial.status !== 'active' || loadingAction || boardSavingRef.current || trial.public_state.primary_decision_committed) return;
     setLoadingAction('open_decision');
     setActionError(null);
     const currentMs = Math.max(activePlayMs, trial.active_play_ms || 0);
@@ -390,7 +403,7 @@ export const PuzzleView: React.FC<PuzzleViewProps> = ({
 
       {/* Revealed Hint Callout */}
       {trial.public_state.revealed_hint && (
-        <div className="p-4 rounded-xl bg-amber-50 border border-amber-200 text-amber-900 text-xs flex items-start space-x-3 shadow-xs">
+        <div role="status" className="p-4 rounded-xl bg-amber-50 border border-amber-200 text-amber-900 text-xs flex items-start space-x-3 shadow-xs">
           <Lightbulb className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
           <div>
             <h4 className="font-bold text-amber-950 mb-0.5">方向引導提示：</h4>
@@ -439,7 +452,7 @@ export const PuzzleView: React.FC<PuzzleViewProps> = ({
                 }`}
               >
                 {isSolved ? <CheckCircle2 className="w-3.5 h-3.5" /> : null}
-                {statusMessage}
+                {isSolved ? '棋盤已符合全部線索' : statusMessage}
               </span>
             )}
           </div>
@@ -455,7 +468,7 @@ export const PuzzleView: React.FC<PuzzleViewProps> = ({
                 <button
                   key={idx}
                   type="button"
-                  disabled={trial.status !== 'active' || loadingAction !== null || busyRef.current}
+                  disabled={trial.status !== 'active' || loadingAction !== null}
                   onClick={() => handleBoardSlotClick(idx)}
                   className={`h-20 rounded-2xl border-2 transition-all flex flex-col items-center justify-center p-2 relative group ${
                     isSlotFilled
@@ -500,6 +513,7 @@ export const PuzzleView: React.FC<PuzzleViewProps> = ({
               <button
                 type="button"
                 onClick={handleClearBoard}
+                disabled={loadingAction !== null}
                 className="text-xs text-slate-500 hover:text-slate-800 flex items-center space-x-1"
               >
                 <RotateCcw className="w-3 h-3" />
@@ -607,7 +621,7 @@ export const PuzzleView: React.FC<PuzzleViewProps> = ({
             onTrialUpdated(fresh);
           }}
           onNext={onNextTrial}
-          loading={loadingAction === 'next'}
+          loading={navigating}
           hasNext={hasNext}
         />
       )}
